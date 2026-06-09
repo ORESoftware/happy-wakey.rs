@@ -11,27 +11,29 @@ ApplicationWindow {
     minimumWidth: 900
     minimumHeight: 600
 
-    // ---- Backend context property (set from Rust) ----
-
-    property bool firstRun: backend.app_config_json === "{}" || backend.app_config_json.length < 10
-
-    Component.onCompleted: {
-        if (firstRun) {
-            stack.currentIndex = 5 // onboarding
+    property var onboardingState: {
+        try {
+            return JSON.parse(backend.onboarding_json)
+        } catch(e) {
+            return { completed: false, current_step: "welcome", step_index: 0 }
         }
     }
+    property bool onboardingComplete: onboardingState.completed === true
+
+    Theme { id: theme }
 
     // ---- Status Bar ----
 
     footer: ToolBar {
         height: 28
+        background: Rectangle { color: theme.sidebarHeader }
         Label {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: 8
             text: backend.status_msg
             font.pixelSize: 11
-            color: "#888"
+            color: theme.muted
         }
         Label {
             anchors.verticalCenter: parent.verticalCenter
@@ -39,22 +41,24 @@ ApplicationWindow {
             anchors.rightMargin: 8
             text: backend.logged_in ? "✓ " + backend.user_email : "Not logged in"
             font.pixelSize: 11
-            color: backend.logged_in ? "#2a2" : "#a88"
+            color: backend.logged_in ? theme.positive : theme.warning
         }
     }
 
     // ---- Main Layout ----
 
     RowLayout {
+        id: mainLayout
         anchors.fill: parent
         spacing: 0
+        visible: window.onboardingComplete
 
         // Sidebar
         Rectangle {
             id: sidebar
             Layout.preferredWidth: 200
             Layout.fillHeight: true
-            color: "#1e1e2e"
+            color: theme.sidebar
 
             ColumnLayout {
                 anchors.fill: parent
@@ -64,26 +68,27 @@ ApplicationWindow {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 56
-                    color: "#181825"
+                    color: theme.sidebarHeader
 
                     Text {
                         anchors.centerIn: parent
                         text: "☀ Happy Wakey"
                         font.pixelSize: 18
                         font.bold: true
-                        color: "#cdd6f4"
+                        color: theme.text
                     }
                 }
 
                 // Nav buttons
                 Repeater {
                     model: [
-                        { icon: "📅", label: "Calendar",     panel: 0 },
-                        { icon: "🌤", label: "Weather",      panel: 1 },
-                        { icon: "📈", label: "Stocks",       panel: 2 },
-                        { icon: "📰", label: "News",         panel: 3 },
-                        { icon: "🌐", label: "Browser",      panel: 4 },
-                        { icon: "⚙",  label: "Settings",     panel: 5 },
+                        { icon: "⌂", label: "Home",         panel: 0 },
+                        { icon: "📅", label: "Calendar",     panel: 1 },
+                        { icon: "🌤", label: "Weather",      panel: 2 },
+                        { icon: "📈", label: "Stocks",       panel: 3 },
+                        { icon: "📰", label: "News",         panel: 4 },
+                        { icon: "🌐", label: "Browser",      panel: 5 },
+                        { icon: "⚙",  label: "Settings",     panel: 6 },
                     ]
 
                     ItemDelegate {
@@ -100,12 +105,12 @@ ApplicationWindow {
                             Text {
                                 text: modelData.label
                                 font.pixelSize: 14
-                                color: highlighted ? "#cdd6f4" : "#6c7086"
+                                color: highlighted ? theme.text : theme.muted
                             }
                         }
 
                         background: Rectangle {
-                            color: highlighted ? "#313244" : "transparent"
+                            color: highlighted ? theme.selected : "transparent"
                         }
 
                         onClicked: stack.currentIndex = modelData.panel
@@ -120,20 +125,30 @@ ApplicationWindow {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            color: "#11111b"
+            color: theme.page
 
             StackLayout {
                 id: stack
                 anchors.fill: parent
                 anchors.margins: 16
 
-                CalendarPanel {}
-                WeatherPanel {}
-                StocksPanel {}
-                NewsPanel {}
-                BrowserPanel {}
-                SettingsPanel {}
+                HomePanel {
+                    theme: theme
+                    onNavigate: function(panel) { stack.currentIndex = panel }
+                }
+                CalendarPanel { theme: theme }
+                WeatherPanel { theme: theme }
+                StocksPanel { theme: theme }
+                NewsPanel { theme: theme }
+                BrowserPanel { theme: theme }
+                SettingsPanel { theme: theme }
             }
         }
+    }
+
+    OnboardingPanel {
+        theme: theme
+        anchors.fill: parent
+        visible: !window.onboardingComplete
     }
 }

@@ -1,6 +1,8 @@
 use chrono::Datelike;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CalendarEvent {
@@ -14,17 +16,26 @@ pub struct CalendarEvent {
     pub location: Option<String>,
 }
 
+fn client() -> Result<Client, String> {
+    Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build calendar client: {e}"))
+}
+
 pub fn fetch_google_events(access_token: &str) -> Result<Vec<CalendarEvent>, String> {
-    let client = Client::new();
+    let client = client()?;
     let now = chrono::Utc::now();
     let week_start = now - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
     let week_end = week_start + chrono::Duration::days(7);
 
-    let url = format!(
-        "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime",
-        week_start.format("%+"),
-        week_end.format("%+"),
-    );
+    let mut url = Url::parse("https://www.googleapis.com/calendar/v3/calendars/primary/events")
+        .map_err(|e| format!("Invalid Google Calendar URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("timeMin", &week_start.to_rfc3339())
+        .append_pair("timeMax", &week_end.to_rfc3339())
+        .append_pair("singleEvents", "true")
+        .append_pair("orderBy", "startTime");
 
     #[derive(Deserialize)]
     struct GoogleResponse {
@@ -43,15 +54,18 @@ pub fn fetch_google_events(access_token: &str) -> Result<Vec<CalendarEvent>, Str
 
     #[derive(Deserialize)]
     struct GoogleDateTime {
+        #[serde(rename = "dateTime")]
         date_time: Option<String>,
         date: Option<String>,
     }
 
     let resp: GoogleResponse = client
-        .get(&url)
+        .get(url)
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .map_err(|e| format!("Google Calendar request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Google Calendar request rejected: {}", e))?
         .json()
         .map_err(|e| format!("Failed to parse Google response: {}", e))?;
 
@@ -90,16 +104,16 @@ pub fn fetch_google_events(access_token: &str) -> Result<Vec<CalendarEvent>, Str
 }
 
 pub fn fetch_outlook_events(access_token: &str) -> Result<Vec<CalendarEvent>, String> {
-    let client = Client::new();
+    let client = client()?;
     let now = chrono::Utc::now();
     let week_start = now - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
     let week_end = week_start + chrono::Duration::days(7);
 
-    let url = format!(
-        "https://graph.microsoft.com/v1.0/me/calendarview?startDateTime={}&endDateTime={}",
-        week_start.format("%Y-%m-%dT%H:%M:%SZ"),
-        week_end.format("%Y-%m-%dT%H:%M:%SZ"),
-    );
+    let mut url = Url::parse("https://graph.microsoft.com/v1.0/me/calendarview")
+        .map_err(|e| format!("Invalid Outlook Calendar URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("startDateTime", &week_start.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+        .append_pair("endDateTime", &week_end.format("%Y-%m-%dT%H:%M:%SZ").to_string());
 
     #[derive(Deserialize)]
     struct OutlookResponse {
@@ -110,6 +124,7 @@ pub fn fetch_outlook_events(access_token: &str) -> Result<Vec<CalendarEvent>, St
     struct OutlookEvent {
         id: String,
         subject: Option<String>,
+        #[serde(rename = "bodyPreview")]
         body_preview: Option<String>,
         location: Option<OutlookLocation>,
         start: OutlookDateTime,
@@ -118,21 +133,26 @@ pub fn fetch_outlook_events(access_token: &str) -> Result<Vec<CalendarEvent>, St
 
     #[derive(Deserialize)]
     struct OutlookLocation {
+        #[serde(rename = "displayName")]
         display_name: Option<String>,
     }
 
     #[derive(Deserialize)]
     struct OutlookDateTime {
+        #[serde(rename = "dateTime")]
         date_time: Option<String>,
         #[allow(dead_code)]
+        #[serde(rename = "timeZone")]
         time_zone: Option<String>,
     }
 
     let resp: OutlookResponse = client
-        .get(&url)
+        .get(url)
         .header("Authorization", format!("Bearer {}", access_token))
         .send()
         .map_err(|e| format!("Outlook request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Outlook request rejected: {}", e))?
         .json()
         .map_err(|e| format!("Failed to parse Outlook response: {}", e))?;
 

@@ -3,7 +3,9 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 Rectangle {
+    id: root
     color: "transparent"
+    property var theme
 
     ColumnLayout {
         anchors.fill: parent
@@ -13,7 +15,7 @@ Rectangle {
             text: "⚙ Settings"
             font.pixelSize: 22
             font.bold: true
-            color: "#cdd6f4"
+            color: theme.text
         }
 
         ScrollView {
@@ -40,7 +42,7 @@ Rectangle {
                                 ? "Signed in as " + backend.user_email
                                 : "Not signed in"
                             font.pixelSize: 14
-                            color: "#cdd6f4"
+                            color: theme.text
                         }
 
                         RowLayout {
@@ -89,7 +91,7 @@ Rectangle {
                                 spacing: 8
                                 Text {
                                     text: model.name + " (" + model.lat + ", " + model.lon + ")"
-                                    color: "#cdd6f4"
+                                    color: theme.text
                                     font.pixelSize: 13
                                     Layout.fillWidth: true
                                 }
@@ -160,7 +162,7 @@ Rectangle {
                                 spacing: 8
                                 Text {
                                     text: model.symbol
-                                    color: "#cdd6f4"
+                                    color: theme.text
                                     font.pixelSize: 13
                                     Layout.fillWidth: true
                                 }
@@ -212,7 +214,7 @@ Rectangle {
                                 Rectangle {
                                     height: 28
                                     width: keywordLabel.implicitWidth + 20
-                                    color: "#313244"
+                                    color: theme.border
                                     radius: 4
                                     RowLayout {
                                         anchors.fill: parent
@@ -222,13 +224,13 @@ Rectangle {
                                         Text {
                                             id: keywordLabel
                                             text: model.keyword
-                                            color: "#cdd6f4"
+                                            color: theme.text
                                             font.pixelSize: 12
                                         }
                                         Text {
                                             text: "✕"
                                             font.pixelSize: 10
-                                            color: "#585b70"
+                                            color: theme.faint
                                             MouseArea {
                                                 anchors.fill: parent
                                                 onClicked: newsKeywordModel.remove(index)
@@ -280,7 +282,7 @@ Rectangle {
                                 spacing: 8
                                 Text {
                                     text: model.title + " (" + model.url + ")"
-                                    color: "#cdd6f4"
+                                    color: theme.text
                                     font.pixelSize: 12
                                     elide: Text.ElideRight
                                     Layout.fillWidth: true
@@ -336,7 +338,7 @@ Rectangle {
                         Text {
                             text: "Back up your config to a private git repo."
                             font.pixelSize: 12
-                            color: "#6c7086"
+                            color: theme.muted
                         }
 
                         RowLayout {
@@ -385,7 +387,13 @@ Rectangle {
                                 news_keywords: ["technology","AI","markets"],
                                 browser_bookmarks: [],
                                 git_repo_path: "",
-                                supabase_sync_enabled: true
+                                supabase_sync_enabled: true,
+                                onboarding: {
+                                    completed: false,
+                                    current_step: "welcome",
+                                    step_index: 0,
+                                    updated_at: null
+                                }
                             }
                             var savedCfg = JSON.stringify(defaults)
                             backend.save_config(savedCfg)
@@ -506,10 +514,11 @@ Rectangle {
     // ---- Section Box Component ----
     component SectionBox: Rectangle {
         property string title: ""
+        property var panelTheme: root.theme
 
-        color: "#181825"
+        color: panelTheme.surface
         radius: 6
-        border.color: "#313244"
+        border.color: panelTheme.border
         border.width: 1
         implicitHeight: 200
 
@@ -521,7 +530,7 @@ Rectangle {
             text: title
             font.pixelSize: 13
             font.bold: true
-            color: "#a6adc8"
+            color: panelTheme.muted
         }
     }
 }

@@ -1,5 +1,8 @@
+use crate::config;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockData {
@@ -31,37 +34,49 @@ struct FinnhubProfile {
 }
 
 pub fn fetch_stock(symbol: &str) -> Result<StockData, String> {
+    let symbol = config::sanitize_symbol(symbol).ok_or_else(|| "Invalid symbol".to_string())?;
     let api_key = std::env::var("FINNHUB_API_KEY")
-        .unwrap_or_else(|_| "demo_key".into());
+        .map_err(|_| "FINNHUB_API_KEY is not configured".to_string())?;
 
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build stock client: {e}"))?;
 
-    let profile_url = format!(
-        "https://finnhub.io/api/v1/stock/profile2?symbol={}&token={}",
-        symbol, api_key
-    );
+    let mut profile_url = Url::parse("https://finnhub.io/api/v1/stock/profile2")
+        .map_err(|e| format!("Invalid Finnhub profile URL: {e}"))?;
+    profile_url
+        .query_pairs_mut()
+        .append_pair("symbol", &symbol)
+        .append_pair("token", &api_key);
     let profile: FinnhubProfile = client
-        .get(&profile_url)
+        .get(profile_url)
         .send()
         .map_err(|e| format!("Stock profile request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Stock profile request rejected: {}", e))?
         .json()
         .unwrap_or(FinnhubProfile {
-            name: symbol.to_string(),
+            name: symbol.clone(),
         });
 
-    let quote_url = format!(
-        "https://finnhub.io/api/v1/quote?symbol={}&token={}",
-        symbol, api_key
-    );
+    let mut quote_url = Url::parse("https://finnhub.io/api/v1/quote")
+        .map_err(|e| format!("Invalid Finnhub quote URL: {e}"))?;
+    quote_url
+        .query_pairs_mut()
+        .append_pair("symbol", &symbol)
+        .append_pair("token", &api_key);
     let quote: FinnhubQuote = client
-        .get(&quote_url)
+        .get(quote_url)
         .send()
         .map_err(|e| format!("Stock quote request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Stock quote request rejected: {}", e))?
         .json()
         .map_err(|e| format!("Failed to parse stock quote: {}", e))?;
 
     Ok(StockData {
-        symbol: symbol.to_string(),
+        symbol,
         price: quote.c,
         change: quote.d,
         change_percent: quote.dp,

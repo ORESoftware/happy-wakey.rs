@@ -1,5 +1,7 @@
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WeatherData {
@@ -42,19 +44,35 @@ struct WindData {
 }
 
 pub fn fetch_weather(lat: f64, lon: f64, location_name: &str) -> Result<WeatherData, String> {
+    if !lat.is_finite()
+        || !lon.is_finite()
+        || !(-90.0..=90.0).contains(&lat)
+        || !(-180.0..=180.0).contains(&lon)
+    {
+        return Err("Invalid weather coordinates".into());
+    }
+
     let api_key = std::env::var("OPENWEATHER_API_KEY")
-        .unwrap_or_else(|_| "demo_key".into());
+        .map_err(|_| "OPENWEATHER_API_KEY is not configured".to_string())?;
 
-    let url = format!(
-        "https://api.openweathermap.org/data/2.5/weather?lat={}&lon={}&units=imperial&appid={}",
-        lat, lon, api_key
-    );
+    let mut url = Url::parse("https://api.openweathermap.org/data/2.5/weather")
+        .map_err(|e| format!("Invalid OpenWeather URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("lat", &lat.to_string())
+        .append_pair("lon", &lon.to_string())
+        .append_pair("units", "imperial")
+        .append_pair("appid", &api_key);
 
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build weather client: {e}"))?;
     let resp: OpenWeatherResponse = client
-        .get(&url)
+        .get(url)
         .send()
         .map_err(|e| format!("Weather request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("Weather request rejected: {}", e))?
         .json()
         .map_err(|e| format!("Failed to parse weather response: {}", e))?;
 

@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Rectangle {
     color: "transparent"
+    property var theme
 
     ColumnLayout {
         anchors.fill: parent
@@ -16,7 +17,7 @@ Rectangle {
                 text: "📅 Calendar"
                 font.pixelSize: 22
                 font.bold: true
-                color: "#cdd6f4"
+                color: theme.text
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -35,14 +36,16 @@ Rectangle {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 32
-                    color: "#1e1e2e"
+                    color: theme.surface
                     radius: 4
+                    border.color: theme.border
+                    border.width: 1
                     Text {
                         anchors.centerIn: parent
                         text: modelData
                         font.pixelSize: 12
                         font.bold: true
-                        color: "#a6adc8"
+                        color: theme.muted
                     }
                 }
             }
@@ -60,7 +63,7 @@ Rectangle {
                 delegate: Rectangle {
                     width: parent ? parent.width : 0
                     height: 52
-                    color: index % 2 === 0 ? "#181825" : "#1e1e2e"
+                    color: index % 2 === 0 ? theme.surface : theme.surfaceAlt
                     radius: 4
 
                     RowLayout {
@@ -76,7 +79,7 @@ Rectangle {
                                 switch (model.provider) {
                                     case "google": return "#4285f4"
                                     case "outlook": return "#00a4ef"
-                                    default: return "#a6adc8"
+                                    default: return theme.muted
                                 }
                             }
                         }
@@ -88,21 +91,21 @@ Rectangle {
                                 text: model.title
                                 font.pixelSize: 14
                                 font.bold: true
-                                color: "#cdd6f4"
+                                color: theme.text
                                 elide: Text.ElideRight
                                 Layout.fillWidth: true
                             }
                             Text {
                                 text: model.start_time + " - " + model.end_time
                                 font.pixelSize: 11
-                                color: "#6c7086"
+                                color: theme.muted
                             }
                         }
 
                         Text {
                             text: model.provider
                             font.pixelSize: 10
-                            color: "#585b70"
+                            color: theme.faint
                         }
                     }
                 }

@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Rectangle {
     color: "transparent"
+    property var theme
 
     ColumnLayout {
         anchors.fill: parent
@@ -15,7 +16,7 @@ Rectangle {
                 text: "📰 News"
                 font.pixelSize: 22
                 font.bold: true
-                color: "#cdd6f4"
+                color: theme.text
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -40,7 +41,7 @@ Rectangle {
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 96
-                        color: "#1e1e2e"
+                        color: theme.surface
                         radius: 6
 
                         MouseArea {
@@ -59,7 +60,7 @@ Rectangle {
                                 Layout.preferredHeight: 80
                                 Layout.alignment: Qt.AlignVCenter
                                 radius: 4
-                                color: "#313244"
+                                color: theme.surfaceAlt
                                 clip: true
                                 Image {
                                     anchors.fill: parent
@@ -84,7 +85,7 @@ Rectangle {
                                     text: model.title
                                     font.pixelSize: 14
                                     font.bold: true
-                                    color: "#cdd6f4"
+                                    color: theme.text
                                     wrapMode: Text.WordWrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -93,7 +94,7 @@ Rectangle {
                                 Text {
                                     text: model.description || ""
                                     font.pixelSize: 12
-                                    color: "#6c7086"
+                                    color: theme.muted
                                     wrapMode: Text.WordWrap
                                     maximumLineCount: 2
                                     elide: Text.ElideRight
@@ -103,7 +104,7 @@ Rectangle {
                                 Text {
                                     text: model.source + " · " + model.date
                                     font.pixelSize: 10
-                                    color: "#585b70"
+                                    color: theme.faint
                                 }
                             }
                         }

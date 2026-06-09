@@ -5,6 +5,7 @@ import QtWebEngine
 
 Rectangle {
     color: "transparent"
+    property var theme
 
     property var tabs: []
     property int currentIndex: -1
@@ -22,16 +23,16 @@ Rectangle {
                 text: "🌐 Quick Browser"
                 font.pixelSize: 22
                 font.bold: true
-                color: "#cdd6f4"
+                color: theme.text
             }
             Item { Layout.fillWidth: true }
 
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 32
-                color: "#1e1e2e"
+                color: theme.surface
                 radius: 4
-                border.color: "#313244"
+                border.color: theme.border
                 border.width: 1
 
                 TextField {
@@ -40,13 +41,15 @@ Rectangle {
                     anchors.leftMargin: 8
                     anchors.rightMargin: 8
                     verticalAlignment: TextInput.AlignVCenter
-                    color: "#cdd6f4"
+                    color: theme.text
                     font.pixelSize: 13
                     selectByMouse: true
                     onAccepted: {
-                        var url = text.trim()
-                        if (url.length === 0) return
-                        if (url.indexOf("://") === -1) url = "https://" + url
+                        var url = normalizeBrowserUrl(text)
+                        if (!url) {
+                            backend.set_status("Only http and https URLs can be opened in the browser")
+                            return
+                        }
                         addTab(url)
                     }
                     placeholderText: "Enter URL and press Enter…"
@@ -86,13 +89,13 @@ Rectangle {
                             text: parent.parent.text
                             font.pixelSize: 11
                             elide: Text.ElideRight
-                            color: tabBar.currentIndex === index ? "#cdd6f4" : "#6c7086"
+                            color: tabBar.currentIndex === index ? theme.text : theme.muted
                             horizontalAlignment: Text.AlignHCenter
                         }
                         Text {
                             text: "✕"
                             font.pixelSize: 10
-                            color: "#585b70"
+                            color: theme.faint
                             MouseArea {
                                 anchors.fill: parent
                                 onClicked: closeTab(index)
@@ -127,6 +130,9 @@ Rectangle {
     }
 
     function addTab(url) {
+        url = normalizeBrowserUrl(url)
+        if (!url) return
+
         // Deduplicate: if url already open, switch to it
         for (var i = 0; i < tabs.length; i++) {
             if (tabs[i].url.toString() === url) {
@@ -137,6 +143,15 @@ Rectangle {
 
         tabs.push({ title: "Loading…", url: url })
         tabBar.currentIndex = tabs.length - 1
+    }
+
+    function normalizeBrowserUrl(raw) {
+        var url = String(raw || "").trim()
+        if (url.length === 0) return null
+        if (url === "about:blank") return url
+        if (url.indexOf("://") === -1) url = "https://" + url
+        if (url.indexOf("https://") !== 0 && url.indexOf("http://") !== 0) return null
+        return url
     }
 
     function closeTab(index) {

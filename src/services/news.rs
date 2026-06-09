@@ -1,5 +1,7 @@
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewsItem {
@@ -21,8 +23,10 @@ struct NewsApiArticle {
     title: Option<String>,
     source: Option<NewsApiSource>,
     url: Option<String>,
+    #[serde(rename = "publishedAt")]
     published_at: Option<String>,
     description: Option<String>,
+    #[serde(rename = "urlToImage")]
     url_to_image: Option<String>,
 }
 
@@ -33,44 +37,75 @@ struct NewsApiSource {
 
 pub fn fetch_news(keywords: &[String]) -> Result<Vec<NewsItem>, String> {
     let api_key = std::env::var("NEWSAPI_KEY")
-        .unwrap_or_else(|_| "demo_key".into());
+        .map_err(|_| "NEWSAPI_KEY is not configured".to_string())?;
 
-    let q = if keywords.is_empty() {
-        "technology".into()
+    let clean_keywords: Vec<String> = keywords
+        .iter()
+        .map(|keyword| keyword.trim())
+        .filter(|keyword| !keyword.is_empty())
+        .take(20)
+        .map(ToOwned::to_owned)
+        .collect();
+
+    let q = if clean_keywords.is_empty() {
+        "technology".to_string()
     } else {
-        keywords.join(" OR ")
+        clean_keywords.join(" OR ")
     };
 
-    let url = format!(
-        "https://newsapi.org/v2/everything?q={}&pageSize=5&sortBy=publishedAt&language=en&apiKey={}",
-        urlencoding(&q),
-        api_key
-    );
+    let mut url = Url::parse("https://newsapi.org/v2/everything")
+        .map_err(|e| format!("Invalid News API URL: {e}"))?;
+    url.query_pairs_mut()
+        .append_pair("q", &q)
+        .append_pair("pageSize", "10")
+        .append_pair("sortBy", "publishedAt")
+        .append_pair("language", "en")
+        .append_pair("apiKey", &api_key);
 
-    let client = Client::new();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|e| format!("Failed to build news client: {e}"))?;
     let resp: NewsApiResponse = client
-        .get(&url)
+        .get(url)
         .send()
         .map_err(|e| format!("News request failed: {}", e))?
+        .error_for_status()
+        .map_err(|e| format!("News request rejected: {}", e))?
         .json()
         .map_err(|e| format!("Failed to parse news response: {}", e))?;
+
+    let keyword_needles: Vec<String> = clean_keywords
+        .iter()
+        .map(|keyword| keyword.to_lowercase())
+        .collect();
 
     Ok(resp
         .articles
         .into_iter()
         .filter_map(|a| {
+            let title = a.title?;
+            let description = a.description;
+            if !keyword_needles.is_empty() {
+                let haystack = format!(
+                    "{} {}",
+                    title.to_lowercase(),
+                    description.as_deref().unwrap_or_default().to_lowercase()
+                );
+                if !keyword_needles.iter().any(|keyword| haystack.contains(keyword)) {
+                    return None;
+                }
+            }
+
             Some(NewsItem {
-                title: a.title?,
+                title,
                 source: a.source?.name.unwrap_or_else(|| "Unknown".into()),
                 url: a.url?,
                 published_at: a.published_at.unwrap_or_default(),
-                description: a.description,
+                description,
                 url_to_image: a.url_to_image,
             })
         })
+        .take(5)
         .collect())
-}
-
-fn urlencoding(s: &str) -> String {
-    url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }

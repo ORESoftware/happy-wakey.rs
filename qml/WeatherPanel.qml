@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Rectangle {
     color: "transparent"
+    property var theme
 
     ColumnLayout {
         anchors.fill: parent
@@ -15,7 +16,7 @@ Rectangle {
                 text: "🌤 Weather"
                 font.pixelSize: 22
                 font.bold: true
-                color: "#cdd6f4"
+                color: theme.text
             }
             Item { Layout.fillWidth: true }
             Button {
@@ -43,9 +44,9 @@ Rectangle {
                     Rectangle {
                         Layout.preferredWidth: 240
                         Layout.preferredHeight: 160
-                        color: "#1e1e2e"
+                        color: theme.surface
                         radius: 8
-                        border.color: "#313244"
+                        border.color: theme.border
                         border.width: 1
 
                         ColumnLayout {
@@ -57,29 +58,29 @@ Rectangle {
                                 text: model.name
                                 font.pixelSize: 18
                                 font.bold: true
-                                color: "#cdd6f4"
+                                color: theme.text
                             }
                             Text {
                                 text: model.condition
                                 font.pixelSize: 13
-                                color: "#a6adc8"
+                                color: theme.muted
                             }
                             Item { height: 4 }
                             Text {
                                 text: model.temp + "°F"
                                 font.pixelSize: 36
                                 font.bold: true
-                                color: "#f9e2af"
+                                color: theme.warning
                             }
                             Text {
                                 text: "Feels like " + model.feels_like + "°F"
                                 font.pixelSize: 11
-                                color: "#6c7086"
+                                color: theme.muted
                             }
                             Text {
                                 text: "💨 " + model.wind + " mph  💧 " + model.humidity + "%"
                                 font.pixelSize: 11
-                                color: "#6c7086"
+                                color: theme.muted
                             }
 
                             Item { Layout.fillHeight: true }

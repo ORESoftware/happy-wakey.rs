@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 Rectangle {
     color: "transparent"
+    property var theme
 
     ColumnLayout {
         anchors.fill: parent
@@ -15,11 +16,11 @@ Rectangle {
                 text: "📈 Stocks"
                 font.pixelSize: 22
                 font.bold: true
-                color: "#cdd6f4"
+                color: theme.text
             }
             Label {
                 text: backend.stocks_loading ? "Loading…" : ""
-                color: "#6c7086"
+                color: theme.muted
                 font.pixelSize: 12
             }
             Item { Layout.fillWidth: true }
@@ -50,11 +51,11 @@ Rectangle {
                     Rectangle {
                         Layout.preferredWidth: 220
                         Layout.preferredHeight: 80
-                        color: "#1e1e2e"
+                        color: theme.surface
                         radius: 6
                         border.color: {
                             var ch = parseFloat(model.change)
-                            return ch >= 0 ? "#2a8a3a" : "#c04040"
+                            return ch >= 0 ? theme.positive : theme.negative
                         }
                         border.width: 1
 
@@ -69,12 +70,12 @@ Rectangle {
                                     text: model.symbol
                                     font.pixelSize: 18
                                     font.bold: true
-                                    color: "#cdd6f4"
+                                    color: theme.text
                                 }
                                 Text {
                                     text: model.name.length > 20 ? model.name.substring(0, 20) + "…" : model.name
                                     font.pixelSize: 10
-                                    color: "#6c7086"
+                                    color: theme.muted
                                     elide: Text.ElideRight
                                 }
                             }
@@ -89,7 +90,7 @@ Rectangle {
                                     font.bold: true
                                     color: {
                                         var ch = parseFloat(model.change)
-                                        return ch >= 0 ? "#a6e3a1" : "#f38ba8"
+                                        return ch >= 0 ? theme.positive : theme.negative
                                     }
                                     horizontalAlignment: Text.AlignRight
                                 }
@@ -102,7 +103,7 @@ Rectangle {
                                     font.pixelSize: 11
                                     color: {
                                         var ch = parseFloat(model.change)
-                                        return ch >= 0 ? "#a6e3a1" : "#f38ba8"
+                                        return ch >= 0 ? theme.positive : theme.negative
                                     }
                                     horizontalAlignment: Text.AlignRight
                                 }
