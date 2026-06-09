@@ -1,0 +1,142 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+Rectangle {
+    color: "transparent"
+
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: 12
+
+        RowLayout {
+            Layout.fillWidth: true
+            Text {
+                text: "📈 Stocks"
+                font.pixelSize: 22
+                font.bold: true
+                color: "#cdd6f4"
+            }
+            Label {
+                text: backend.stocks_loading ? "Loading…" : ""
+                color: "#6c7086"
+                font.pixelSize: 12
+            }
+            Item { Layout.fillWidth: true }
+            Button {
+                text: "Refresh All"
+                onClicked: {
+                    backend.stocks_loading = true
+                    backend.refresh_stocks()
+                }
+                flat: true
+            }
+        }
+
+        ScrollView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            clip: true
+
+            GridLayout {
+                columns: 4
+                columnSpacing: 8
+                rowSpacing: 8
+                width: parent ? parent.width : 0
+
+                Repeater {
+                    model: stocksModel
+
+                    Rectangle {
+                        Layout.preferredWidth: 220
+                        Layout.preferredHeight: 80
+                        color: "#1e1e2e"
+                        radius: 6
+                        border.color: {
+                            var ch = parseFloat(model.change)
+                            return ch >= 0 ? "#2a8a3a" : "#c04040"
+                        }
+                        border.width: 1
+
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 12
+                            spacing: 8
+
+                            ColumnLayout {
+                                spacing: 2
+                                Text {
+                                    text: model.symbol
+                                    font.pixelSize: 18
+                                    font.bold: true
+                                    color: "#cdd6f4"
+                                }
+                                Text {
+                                    text: model.name.length > 20 ? model.name.substring(0, 20) + "…" : model.name
+                                    font.pixelSize: 10
+                                    color: "#6c7086"
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            Item { Layout.fillWidth: true }
+
+                            ColumnLayout {
+                                spacing: 2
+                                Text {
+                                    text: "$" + model.price
+                                    font.pixelSize: 18
+                                    font.bold: true
+                                    color: {
+                                        var ch = parseFloat(model.change)
+                                        return ch >= 0 ? "#a6e3a1" : "#f38ba8"
+                                    }
+                                    horizontalAlignment: Text.AlignRight
+                                }
+                                Text {
+                                    text: {
+                                        var ch = parseFloat(model.change)
+                                        var cp = parseFloat(model.change_percent)
+                                        return (ch >= 0 ? "+" : "") + model.change + " (" + (cp >= 0 ? "+" : "") + model.change_percent + "%)"
+                                    }
+                                    font.pixelSize: 11
+                                    color: {
+                                        var ch = parseFloat(model.change)
+                                        return ch >= 0 ? "#a6e3a1" : "#f38ba8"
+                                    }
+                                    horizontalAlignment: Text.AlignRight
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ListModel { id: stocksModel }
+
+    onVisibleChanged: {
+        if (visible && stocksModel.count === 0) backend.refresh_stocks()
+    }
+
+    Connections {
+        target: backend
+        function onStocks_changed() {
+            try {
+                var arr = JSON.parse(backend.stocks_json)
+                stocksModel.clear()
+                for (var i = 0; i < arr.length; i++) {
+                    var s = arr[i]
+                    stocksModel.append({
+                        symbol: s.symbol,
+                        name: s.name || s.symbol,
+                        price: s.price.toFixed(2),
+                        change: s.change.toFixed(2),
+                        change_percent: s.change_percent.toFixed(2)
+                    })
+                }
+            } catch(e) {}
+        }
+    }
+}

@@ -1,0 +1,55 @@
+[help]
+url = "https://github.com/anomalyco/happy-wakey"
+
+[flags.supabase_url]
+env = "SUPABASE_URL"
+aliases = ["supabase-url"]
+short = "s"
+type = "string"
+default = "https://gtbeuxcolbpuipvqiibn.supabase.co"
+help = "Supabase project URL"
+
+[flags.supabase_anon_key]
+env = "SUPABASE_ANON_KEY"
+aliases = ["supabase-anon-key"]
+type = "string"
+default = ""
+help = "Supabase anon/public key"
+
+[flags.openweather_api_key]
+env = "OPENWEATHER_API_KEY"
+aliases = ["openweather-api-key", "owm-key"]
+short = "w"
+type = "string"
+default = ""
+help = "OpenWeatherMap API key"
+
+[flags.finnhub_api_key]
+env = "FINNHUB_API_KEY"
+aliases = ["finnhub-api-key"]
+short = "f"
+type = "string"
+default = ""
+help = "Finnhub API key for stock data"
+
+[flags.newsapi_key]
+env = "NEWSAPI_KEY"
+aliases = ["newsapi-key", "news-api-key"]
+short = "n"
+type = "string"
+default = ""
+help = "NewsAPI key"
+
+[flags.git_repo]
+env = "GIT_REPO_PATH"
+aliases = ["git-repo", "git-repo-path"]
+type = "string"
+default = ""
+help = "Path to git repository for config backup"
+
+[flags.config_dir]
+env = "CONFIG_DIR"
+aliases = ["config-dir"]
+type = "string"
+default = ""
+help = "Override for config directory path"
