@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 Rectangle {
     color: "transparent"
@@ -19,17 +20,14 @@ Rectangle {
                 color: theme.text
             }
             Label {
-                text: backend.stocks_loading ? "Loading…" : ""
+                text: Backend.stocks_loading ? "Loading…" : ""
                 color: theme.muted
                 font.pixelSize: 12
             }
             Item { Layout.fillWidth: true }
             Button {
                 text: "Refresh All"
-                onClicked: {
-                    backend.stocks_loading = true
-                    backend.refresh_stocks()
-                }
+                onClicked: Backend.refresh_stocks()
                 flat: true
             }
         }
@@ -118,14 +116,14 @@ Rectangle {
     ListModel { id: stocksModel }
 
     onVisibleChanged: {
-        if (visible && stocksModel.count === 0) backend.refresh_stocks()
+        if (visible && stocksModel.count === 0) Backend.refresh_stocks()
     }
 
     Connections {
-        target: backend
-        function onStocks_changed() {
+        target: Backend
+        function onStocks_jsonChanged() {
             try {
-                var arr = JSON.parse(backend.stocks_json)
+                var arr = JSON.parse(Backend.stocks_json)
                 stocksModel.clear()
                 for (var i = 0; i < arr.length; i++) {
                     var s = arr[i]

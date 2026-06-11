@@ -1,12 +1,15 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 Rectangle {
     id: root
     color: theme.page
 
     property var theme
+    signal finished()
+
     property var steps: [
         { id: "welcome", title: "Start the day in one place", kicker: "Happy Wakey keeps the daily essentials close without turning your desktop into tab soup." },
         { id: "account", title: "Connect calendar sync", kicker: "Sign in once, then calendar reminders and cloud onboarding progress can follow you." },
@@ -17,10 +20,12 @@ Rectangle {
 
     property int stepIndex: initialStepIndex()
     property var cfg: parseConfig()
+    property string actionStatus: ""
+    property bool userNavigated: false
 
     function parseConfig() {
         try {
-            return JSON.parse(backend.app_config_json)
+            return JSON.parse(Backend.app_config_json)
         } catch(e) {
             return {}
         }
@@ -28,7 +33,7 @@ Rectangle {
 
     function parseOnboarding() {
         try {
-            return JSON.parse(backend.onboarding_json)
+            return JSON.parse(Backend.onboarding_json)
         } catch(e) {
             return { completed: false, current_step: "welcome", step_index: 0 }
         }
@@ -44,11 +49,14 @@ Rectangle {
     }
 
     function persistStep(completed) {
-        backend.save_onboarding_state(steps[stepIndex].id, stepIndex, completed === true)
+        actionStatus = completed === true ? "Opening dashboard..." : "Saved " + steps[stepIndex].title
+        Backend.set_status(actionStatus)
+        Backend.save_onboarding_state(steps[stepIndex].id, stepIndex, completed === true)
     }
 
     function nextStep() {
         if (stepIndex < steps.length - 1) {
+            userNavigated = true
             stepIndex += 1
             persistStep(false)
         }
@@ -56,9 +64,23 @@ Rectangle {
 
     function previousStep() {
         if (stepIndex > 0) {
+            userNavigated = true
             stepIndex -= 1
             persistStep(false)
         }
+    }
+
+    function skipToReady() {
+        userNavigated = true
+        stepIndex = steps.length - 1
+        persistStep(false)
+    }
+
+    function finishOnboarding() {
+        userNavigated = true
+        applyStarterConfig()
+        persistStep(true)
+        root.finished()
     }
 
     function applyStarterConfig() {
@@ -87,10 +109,19 @@ Rectangle {
             }]
         }
 
-        backend.save_config(JSON.stringify(cfg))
+        Backend.save_config(JSON.stringify(cfg))
     }
 
-    Component.onCompleted: persistStep(false)
+    Connections {
+        target: Backend
+        function onOnboarding_jsonChanged() {
+            if (userNavigated) return
+            var state = parseOnboarding()
+            if (state.completed) return
+            var idx = Number(state.step_index || 0)
+            if (idx >= 0 && idx < steps.length) stepIndex = idx
+        }
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -163,8 +194,8 @@ Rectangle {
 
                 Text {
                     Layout.fillWidth: true
-                    text: backend.logged_in ? "Signed in as " + backend.user_email : "Local setup is available before sign-in."
-                    color: backend.logged_in ? theme.positive : theme.muted
+                    text: Backend.logged_in ? "Signed in as " + Backend.user_email : "Local setup is available before sign-in."
+                    color: Backend.logged_in ? theme.positive : theme.muted
                     font.pixelSize: 12
                     wrapMode: Text.WordWrap
                 }
@@ -219,9 +250,9 @@ Rectangle {
                         Text { Layout.fillWidth: true; text: "Use Google, Apple, or Microsoft. Microsoft is routed through Supabase's Azure provider."; color: theme.text; font.pixelSize: 15; wrapMode: Text.WordWrap }
                         RowLayout {
                             spacing: 10
-                            Button { text: "Google"; onClicked: backend.login("google") }
-                            Button { text: "Apple"; onClicked: backend.login("apple") }
-                            Button { text: "Microsoft"; onClicked: backend.login("microsoft") }
+                            Button { text: "Google"; onClicked: Backend.login("google") }
+                            Button { text: "Apple"; onClicked: Backend.login("apple") }
+                            Button { text: "Microsoft"; onClicked: Backend.login("microsoft") }
                         }
                     }
 
@@ -268,32 +299,43 @@ Rectangle {
 
                 RowLayout {
                     Layout.fillWidth: true
+                    Layout.preferredHeight: 48
                     spacing: 10
+                    z: 10
 
-                    Button {
+                    NavButton {
                         text: "Back"
                         enabled: stepIndex > 0
+                        theme: root.theme
+                        primary: false
                         onClicked: previousStep()
                     }
 
                     Item { Layout.fillWidth: true }
 
-                    Button {
-                        text: "Skip setup"
-                        visible: stepIndex < steps.length - 1
-                        onClicked: {
-                            stepIndex = steps.length - 1
-                            persistStep(false)
-                        }
+                    Text {
+                        text: actionStatus
+                        color: theme.muted
+                        font.pixelSize: 12
+                        visible: actionStatus.length > 0
                     }
 
-                    Button {
+                    NavButton {
+                        text: "Skip setup"
+                        visible: stepIndex < steps.length - 1
+                        theme: root.theme
+                        primary: false
+                        onClicked: skipToReady()
+                    }
+
+                    NavButton {
                         text: stepIndex === steps.length - 1 ? "Open dashboard" : "Continue"
-                        highlighted: true
+                        theme: root.theme
+                        primary: true
                         onClicked: {
                             if (stepIndex === 2 || stepIndex === 3) applyStarterConfig()
                             if (stepIndex === steps.length - 1) {
-                                persistStep(true)
+                                finishOnboarding()
                             } else {
                                 nextStep()
                             }
@@ -301,6 +343,43 @@ Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    component NavButton: Rectangle {
+        id: button
+
+        property string text: ""
+        property bool primary: false
+        property var theme
+        signal clicked()
+
+        Layout.preferredWidth: Math.max(132, label.implicitWidth + 34)
+        Layout.preferredHeight: 44
+        radius: 6
+        opacity: enabled ? 1 : 0.45
+        color: primary
+            ? (mouseArea.pressed ? Qt.darker(theme.accent, 1.15) : theme.accent)
+            : (mouseArea.pressed ? theme.selected : theme.surfaceAlt)
+        border.color: primary ? theme.accent : theme.border
+        border.width: 1
+
+        Text {
+            id: label
+            anchors.centerIn: parent
+            text: button.text
+            color: button.primary ? theme.accentText : theme.text
+            font.pixelSize: 13
+            font.bold: button.primary
+        }
+
+        MouseArea {
+            id: mouseArea
+            anchors.fill: parent
+            enabled: button.enabled
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: button.clicked()
         }
     }
 }

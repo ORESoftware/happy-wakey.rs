@@ -6,7 +6,7 @@ env = "SUPABASE_URL"
 aliases = ["supabase-url"]
 short = "s"
 type = "string"
-default = "https://gtbeuxcolbpuipvqiibn.supabase.co"
+default = "https://vgzyyfhnendriyrhakkp.supabase.co"
 help = "Supabase project URL"
 
 [flags.supabase_anon_key]

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 Rectangle {
     color: "transparent"
@@ -22,7 +23,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
             Button {
                 text: "Refresh"
-                onClicked: backend.refresh_calendar()
+                onClicked: Backend.refresh_calendar()
                 flat: true
             }
         }
@@ -51,7 +52,7 @@ Rectangle {
             }
         }
 
-        // Event list (parsed from backend.calendar_json)
+        // Event list (parsed from Backend.calendar_json)
         ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -72,8 +73,8 @@ Rectangle {
                         spacing: 8
 
                         Rectangle {
-                            width: 4
-                            height: parent.height
+                            Layout.preferredWidth: 4
+                            Layout.fillHeight: true
                             radius: 2
                             color: {
                                 switch (model.provider) {
@@ -117,14 +118,14 @@ Rectangle {
     ListModel { id: eventModel }
 
     onVisibleChanged: {
-        if (visible) backend.refresh_calendar()
+        if (visible) Backend.refresh_calendar()
     }
 
     Connections {
-        target: backend
-        function onCalendar_changed() {
+        target: Backend
+        function onCalendar_jsonChanged() {
             try {
-                var arr = JSON.parse(backend.calendar_json)
+                var arr = JSON.parse(Backend.calendar_json)
                 eventModel.clear()
                 for (var i = 0; i < arr.length; i++) {
                     var ev = arr[i]

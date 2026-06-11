@@ -1,14 +1,22 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 import QtWebEngine
 
 Rectangle {
+    id: root
     color: "transparent"
     property var theme
 
-    property var tabs: []
-    property int currentIndex: -1
+    // Tabs live in a ListModel: a plain `var` array mutated in place (push/splice)
+    // does not notify QML, so Repeaters bound to it never refresh.
+    ListModel { id: tabsModel }
+
+    function tabLabel(title) {
+        var t = (title && title.length > 0) ? title : "Loading…"
+        return t.length > 20 ? t.substring(0, 18) + "…" : t
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -47,13 +55,13 @@ Rectangle {
                     onAccepted: {
                         var url = normalizeBrowserUrl(text)
                         if (!url) {
-                            backend.set_status("Only http and https URLs can be opened in the browser")
+                            Backend.set_status("Only http and https URLs can be opened in the browser")
                             return
                         }
                         addTab(url)
+                        text = ""
                     }
                     placeholderText: "Enter URL and press Enter…"
-
                 }
             }
 
@@ -73,20 +81,19 @@ Rectangle {
         TabBar {
             id: tabBar
             Layout.fillWidth: true
-            visible: tabs.length > 0
+            visible: tabsModel.count > 0
 
             Repeater {
-                model: tabs
+                model: tabsModel
 
                 TabButton {
-                    text: modelData.title.length > 20 ? modelData.title.substring(0, 18) + "…" : modelData.title
                     width: 140
 
                     contentItem: RowLayout {
                         spacing: 4
                         Text {
                             Layout.fillWidth: true
-                            text: parent.parent.text
+                            text: tabLabel(model.title)
                             font.pixelSize: 11
                             elide: Text.ElideRight
                             color: tabBar.currentIndex === index ? theme.text : theme.muted
@@ -111,19 +118,23 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
 
+            // Friendly empty state when no tabs are open.
+            Text {
+                anchors.centerIn: parent
+                visible: tabsModel.count === 0
+                text: "Type a URL above or open a bookmark to start browsing."
+                color: theme.muted
+                font.pixelSize: 14
+            }
+
             Repeater {
-                model: tabs
+                model: tabsModel
 
                 WebEngineView {
-                    visible: tabBar.currentIndex === index
                     anchors.fill: parent
-                    url: modelData.url
-                    onTitleChanged: {
-                        if (visible) {
-                            tabs[index].title = title
-                            tabBar.itemAt(index).text = title.length > 20 ? title.substring(0, 18) + "…" : title
-                        }
-                    }
+                    visible: tabBar.currentIndex === index
+                    url: model.url
+                    onTitleChanged: tabsModel.setProperty(index, "title", title || "Untitled")
                 }
             }
         }
@@ -133,16 +144,16 @@ Rectangle {
         url = normalizeBrowserUrl(url)
         if (!url) return
 
-        // Deduplicate: if url already open, switch to it
-        for (var i = 0; i < tabs.length; i++) {
-            if (tabs[i].url.toString() === url) {
+        // Deduplicate: if the URL is already open, just switch to it.
+        for (var i = 0; i < tabsModel.count; i++) {
+            if (tabsModel.get(i).url === url) {
                 tabBar.currentIndex = i
                 return
             }
         }
 
-        tabs.push({ title: "Loading…", url: url })
-        tabBar.currentIndex = tabs.length - 1
+        tabsModel.append({ title: "Loading…", url: url })
+        tabBar.currentIndex = tabsModel.count - 1
     }
 
     function normalizeBrowserUrl(raw) {
@@ -155,33 +166,21 @@ Rectangle {
     }
 
     function closeTab(index) {
-        if (index < 0 || index >= tabs.length) return
-        tabs.splice(index, 1)
-        if (tabBar.currentIndex >= tabs.length)
-            tabBar.currentIndex = tabs.length - 1
+        if (index < 0 || index >= tabsModel.count) return
+        tabsModel.remove(index)
+        if (tabBar.currentIndex >= tabsModel.count)
+            tabBar.currentIndex = tabsModel.count - 1
     }
 
     onVisibleChanged: {
-        if (visible) {
-            // Check config for bookmarks
-            try {
-                var cfg = JSON.parse(backend.app_config_json)
-                if (cfg.browser_bookmarks && cfg.browser_bookmarks.length > 0) {
-                    for (var i = 0; i < cfg.browser_bookmarks.length; i++) {
-                        // Only add if not already open
-                        var found = false
-                        for (var j = 0; j < tabs.length; j++) {
-                            if (tabs[j].url.toString() === cfg.browser_bookmarks[i].url) {
-                                found = true
-                                break
-                            }
-                        }
-                        if (!found) {
-                            addTab(cfg.browser_bookmarks[i].url)
-                        }
-                    }
-                }
-            } catch(e) {}
-        }
+        if (!visible) return
+        // Open saved bookmarks as tabs (skipping any already open).
+        try {
+            var cfg = JSON.parse(Backend.app_config_json)
+            var marks = cfg.browser_bookmarks || []
+            for (var i = 0; i < marks.length; i++) {
+                addTab(marks[i].url)
+            }
+        } catch(e) {}
     }
 }

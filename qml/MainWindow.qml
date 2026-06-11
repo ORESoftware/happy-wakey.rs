@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 ApplicationWindow {
     id: window
@@ -13,12 +14,17 @@ ApplicationWindow {
 
     property var onboardingState: {
         try {
-            return JSON.parse(backend.onboarding_json)
+            return JSON.parse(Backend.onboarding_json)
         } catch(e) {
             return { completed: false, current_step: "welcome", step_index: 0 }
         }
     }
-    property bool onboardingComplete: onboardingState.completed === true
+    property bool onboardingFinishedLocal: false
+    property bool onboardingComplete: onboardingFinishedLocal || onboardingState.completed === true
+
+    // Pull onboarding state from Supabase once the UI is up (replaces the
+    // startup hydrate that main() used to run before the engine existed).
+    Component.onCompleted: Backend.startup()
 
     Theme { id: theme }
 
@@ -31,7 +37,7 @@ ApplicationWindow {
             anchors.verticalCenter: parent.verticalCenter
             anchors.left: parent.left
             anchors.leftMargin: 8
-            text: backend.status_msg
+            text: Backend.status_msg
             font.pixelSize: 11
             color: theme.muted
         }
@@ -39,9 +45,9 @@ ApplicationWindow {
             anchors.verticalCenter: parent.verticalCenter
             anchors.right: parent.right
             anchors.rightMargin: 8
-            text: backend.logged_in ? "✓ " + backend.user_email : "Not logged in"
+            text: Backend.logged_in ? "✓ " + Backend.user_email : "Not logged in"
             font.pixelSize: 11
-            color: backend.logged_in ? theme.positive : theme.warning
+            color: Backend.logged_in ? theme.positive : theme.warning
         }
     }
 
@@ -150,5 +156,9 @@ ApplicationWindow {
         theme: theme
         anchors.fill: parent
         visible: !window.onboardingComplete
+        onFinished: {
+            window.onboardingFinishedLocal = true
+            stack.currentIndex = 0
+        }
     }
 }

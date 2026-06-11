@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 Rectangle {
     color: "transparent"
@@ -21,7 +22,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
             Button {
                 text: "Refresh"
-                onClicked: backend.refresh_news()
+                onClicked: Backend.refresh_news()
                 flat: true
             }
         }
@@ -47,7 +48,7 @@ Rectangle {
                         MouseArea {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: backend.open_url(model.url)
+                            onClicked: Backend.open_url(model.url)
                         }
 
                         RowLayout {
@@ -117,14 +118,14 @@ Rectangle {
     ListModel { id: newsModel }
 
     onVisibleChanged: {
-        if (visible) backend.refresh_news()
+        if (visible) Backend.refresh_news()
     }
 
     Connections {
-        target: backend
-        function onNews_changed() {
+        target: Backend
+        function onNews_jsonChanged() {
             try {
-                var arr = JSON.parse(backend.news_json)
+                var arr = JSON.parse(Backend.news_json)
                 newsModel.clear()
                 for (var i = 0; i < arr.length; i++) {
                     var n = arr[i]

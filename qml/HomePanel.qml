@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 Rectangle {
     id: root
@@ -25,7 +26,7 @@ Rectangle {
     }
 
     function refreshConfig() {
-        cfg = parseJson(backend.app_config_json, {})
+        cfg = parseJson(Backend.app_config_json, {})
         weatherLocationCount = cfg.weather_locations ? cfg.weather_locations.length : 0
         stockSymbolCount = cfg.stock_symbols ? cfg.stock_symbols.length : 0
         newsKeywordCount = cfg.news_keywords ? cfg.news_keywords.length : 0
@@ -34,7 +35,7 @@ Rectangle {
     }
 
     function rebuildCalendar() {
-        var arr = parseJson(backend.calendar_json, [])
+        var arr = parseJson(Backend.calendar_json, [])
         calendarModel.clear()
         for (var i = 0; i < Math.min(arr.length, 3); i++) {
             var ev = arr[i]
@@ -47,7 +48,7 @@ Rectangle {
     }
 
     function rebuildWeather() {
-        var arr = parseJson(backend.weather_json, [])
+        var arr = parseJson(Backend.weather_json, [])
         weatherModel.clear()
         for (var i = 0; i < Math.min(arr.length, 3); i++) {
             var w = arr[i]
@@ -59,7 +60,7 @@ Rectangle {
     }
 
     function rebuildStocks() {
-        var arr = parseJson(backend.stocks_json, [])
+        var arr = parseJson(Backend.stocks_json, [])
         stocksModel.clear()
         for (var i = 0; i < Math.min(arr.length, 4); i++) {
             var s = arr[i]
@@ -71,7 +72,7 @@ Rectangle {
     }
 
     function rebuildNews() {
-        var arr = parseJson(backend.news_json, [])
+        var arr = parseJson(Backend.news_json, [])
         newsModel.clear()
         for (var i = 0; i < Math.min(arr.length, 3); i++) {
             var n = arr[i]
@@ -95,10 +96,10 @@ Rectangle {
     }
 
     function refreshAll() {
-        backend.refresh_calendar()
-        backend.refresh_weather()
-        backend.refresh_stocks()
-        backend.refresh_news()
+        Backend.refresh_calendar()
+        Backend.refresh_weather()
+        Backend.refresh_stocks()
+        Backend.refresh_news()
     }
 
     Component.onCompleted: {
@@ -110,12 +111,12 @@ Rectangle {
     }
 
     Connections {
-        target: backend
-        function onConfig_changed() { refreshConfig() }
-        function onCalendar_changed() { rebuildCalendar() }
-        function onWeather_changed() { rebuildWeather() }
-        function onStocks_changed() { rebuildStocks() }
-        function onNews_changed() { rebuildNews() }
+        target: Backend
+        function onApp_config_jsonChanged() { refreshConfig() }
+        function onCalendar_jsonChanged() { rebuildCalendar() }
+        function onWeather_jsonChanged() { rebuildWeather() }
+        function onStocks_jsonChanged() { rebuildStocks() }
+        function onNews_jsonChanged() { rebuildNews() }
     }
 
     ListModel { id: calendarModel }
@@ -144,7 +145,7 @@ Rectangle {
                 }
 
                 Text {
-                    text: backend.logged_in ? "Signed in as " + backend.user_email : "Local dashboard preview"
+                    text: Backend.logged_in ? "Signed in as " + Backend.user_email : "Local dashboard preview"
                     font.pixelSize: 12
                     color: theme.muted
                 }
@@ -175,11 +176,11 @@ Rectangle {
                     Layout.preferredHeight: 220
                     title: "Calendar"
                     metric: calendarModel.count > 0 ? calendarModel.count + " loaded" : "Not loaded"
-                    detail: backend.logged_in ? "Weekly events and reminders" : "Sign in to pull calendar events"
+                    detail: Backend.logged_in ? "Weekly events and reminders" : "Sign in to pull calendar events"
                     model: calendarModel
                     emptyText: "No events loaded yet."
                     onOpen: root.navigate(1)
-                    onRefresh: backend.refresh_calendar()
+                    onRefresh: Backend.refresh_calendar()
                 }
 
                 PreviewCard {
@@ -192,7 +193,7 @@ Rectangle {
                     model: weatherModel
                     emptyText: "Add up to 5 locations in Settings."
                     onOpen: root.navigate(2)
-                    onRefresh: backend.refresh_weather()
+                    onRefresh: Backend.refresh_weather()
                 }
 
                 PreviewCard {
@@ -205,7 +206,7 @@ Rectangle {
                     model: stocksModel
                     emptyText: "Your watchlist will preview here."
                     onOpen: root.navigate(3)
-                    onRefresh: backend.refresh_stocks()
+                    onRefresh: Backend.refresh_stocks()
                 }
 
                 PreviewCard {
@@ -218,7 +219,7 @@ Rectangle {
                     model: newsModel
                     emptyText: "Refresh to load current headlines."
                     onOpen: root.navigate(4)
-                    onRefresh: backend.refresh_news()
+                    onRefresh: Backend.refresh_news()
                 }
 
                 PreviewCard {

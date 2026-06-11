@@ -1,6 +1,4 @@
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,15 +57,13 @@ pub fn fetch_news(keywords: &[String]) -> Result<Vec<NewsItem>, String> {
         .append_pair("q", &q)
         .append_pair("pageSize", "10")
         .append_pair("sortBy", "publishedAt")
-        .append_pair("language", "en")
-        .append_pair("apiKey", &api_key);
+        .append_pair("language", "en");
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to build news client: {e}"))?;
-    let resp: NewsApiResponse = client
+    // Send the API key as a header rather than a query param so it doesn't leak
+    // into URL/referer logs. NewsAPI supports both; `X-Api-Key` is preferred.
+    let resp: NewsApiResponse = crate::http::shared_client()
         .get(url)
+        .header("X-Api-Key", &api_key)
         .send()
         .map_err(|e| format!("News request failed: {}", e))?
         .error_for_status()

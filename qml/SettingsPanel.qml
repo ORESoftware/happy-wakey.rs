@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 Rectangle {
     id: root
@@ -33,13 +34,12 @@ Rectangle {
                     Layout.fillWidth: true
 
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
+                        Layout.fillWidth: true
                         spacing: 8
 
                         Text {
-                            text: backend.logged_in
-                                ? "Signed in as " + backend.user_email
+                            text: Backend.logged_in
+                                ? "Signed in as " + Backend.user_email
                                 : "Not signed in"
                             font.pixelSize: 14
                             color: theme.text
@@ -49,23 +49,23 @@ Rectangle {
                             spacing: 8
                             Button {
                                 text: "Sign in with Google"
-                                visible: !backend.logged_in
-                                onClicked: backend.login("google")
+                                visible: !Backend.logged_in
+                                onClicked: Backend.login("google")
                             }
                             Button {
                                 text: "Sign in with Apple"
-                                visible: !backend.logged_in
-                                onClicked: backend.login("apple")
+                                visible: !Backend.logged_in
+                                onClicked: Backend.login("apple")
                             }
                             Button {
                                 text: "Sign in with Microsoft"
-                                visible: !backend.logged_in
-                                onClicked: backend.login("microsoft")
+                                visible: !Backend.logged_in
+                                onClicked: Backend.login("microsoft")
                             }
                             Button {
                                 text: "Sign Out"
-                                visible: backend.logged_in
-                                onClicked: backend.logout()
+                                visible: Backend.logged_in
+                                onClicked: Backend.logout()
                             }
                         }
                     }
@@ -77,8 +77,7 @@ Rectangle {
                     Layout.fillWidth: true
 
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
+                        Layout.fillWidth: true
                         spacing: 8
 
                         ListView {
@@ -148,8 +147,7 @@ Rectangle {
                     Layout.fillWidth: true
 
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
+                        Layout.fillWidth: true
                         spacing: 8
 
                         ListView {
@@ -202,8 +200,7 @@ Rectangle {
                     Layout.fillWidth: true
 
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
+                        Layout.fillWidth: true
                         spacing: 8
 
                         Flow {
@@ -268,8 +265,7 @@ Rectangle {
                     Layout.fillWidth: true
 
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
+                        Layout.fillWidth: true
                         spacing: 8
 
                         ListView {
@@ -331,8 +327,7 @@ Rectangle {
                     Layout.fillWidth: true
 
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 16
+                        Layout.fillWidth: true
                         spacing: 8
 
                         Text {
@@ -349,7 +344,7 @@ Rectangle {
                                 Layout.fillWidth: true
                                 text: {
                                     try {
-                                        var cfg = JSON.parse(backend.app_config_json)
+                                        var cfg = JSON.parse(Backend.app_config_json)
                                         return cfg.git_repo_path || ""
                                     } catch(e) { return "" }
                                 }
@@ -357,7 +352,7 @@ Rectangle {
                             Button {
                                 text: "Save & Sync"
                                 onClicked: {
-                                    backend.set_status("Git sync not yet implemented in this build")
+                                    Backend.set_status("Git sync not yet implemented in this build")
                                 }
                             }
                         }
@@ -379,11 +374,11 @@ Rectangle {
                         onClicked: {
                             var defaults = {
                                 version: "0.1.0",
-                                user_id: backend.user_id,
+                                user_id: Backend.user_id,
                                 supabase_session: null,
                                 calendar_providers: [],
                                 weather_locations: [],
-                                stock_symbols: ["AAPL","GOOGL","MSFT","AMZN","NVDA","META","TSLA","SPY","QQQ","GLD","BTC-USD","ETH-USD","JPM","V","KO","DIS","NFLX","BA","XOM","PG"],
+                                stock_symbols: ["AAPL","GOOGL","MSFT","AMZN","NVDA","META","TSLA","SPY","QQQ","GLD","AMD","WMT","JPM","V","KO","DIS","NFLX","BA","XOM","PG"],
                                 news_keywords: ["technology","AI","markets"],
                                 browser_bookmarks: [],
                                 git_repo_path: "",
@@ -396,13 +391,13 @@ Rectangle {
                                 }
                             }
                             var savedCfg = JSON.stringify(defaults)
-                            backend.save_config(savedCfg)
-                            backend.reload_config()
+                            Backend.save_config(savedCfg)
+                            Backend.reload_config()
                         }
                     }
                 }
 
-                Item { height: 32 }
+                Item { Layout.preferredHeight: 32 }
             }
         }
     }
@@ -410,7 +405,7 @@ Rectangle {
     // Helper to collect and save all settings
     function saveAllSettings() {
         try {
-            var cfg = JSON.parse(backend.app_config_json)
+            var cfg = JSON.parse(Backend.app_config_json)
 
             // Weather locations
             var locs = []
@@ -451,10 +446,10 @@ Rectangle {
             // Git repo
             cfg.git_repo_path = gitRepoPath.text || ""
 
-            backend.save_config(JSON.stringify(cfg))
-            backend.reload_config()
+            Backend.save_config(JSON.stringify(cfg))
+            Backend.reload_config()
         } catch(e) {
-            backend.set_status("Save error: " + e)
+            Backend.set_status("Save error: " + e)
         }
     }
 
@@ -469,7 +464,7 @@ Rectangle {
         if (!visible) return
 
         try {
-            var cfg = JSON.parse(backend.app_config_json)
+            var cfg = JSON.parse(Backend.app_config_json)
 
             weatherLocModel.clear()
             if (cfg.weather_locations) {
@@ -512,7 +507,11 @@ Rectangle {
     }
 
     // ---- Section Box Component ----
+    // Title sits above the content (no overlap) and height grows with content
+    // (no clipping). Content is provided as the default children.
     component SectionBox: Rectangle {
+        id: sectionBox
+        default property alias content: contentColumn.data
         property string title: ""
         property var panelTheme: root.theme
 
@@ -520,17 +519,30 @@ Rectangle {
         radius: 6
         border.color: panelTheme.border
         border.width: 1
-        implicitHeight: 200
+        implicitHeight: outerColumn.implicitHeight + 28
 
-        Text {
-            anchors.top: parent.top
+        ColumnLayout {
+            id: outerColumn
             anchors.left: parent.left
-            anchors.topMargin: 8
-            anchors.leftMargin: 12
-            text: title
-            font.pixelSize: 13
-            font.bold: true
-            color: panelTheme.muted
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.leftMargin: 16
+            anchors.rightMargin: 16
+            anchors.topMargin: 14
+            spacing: 10
+
+            Text {
+                text: sectionBox.title
+                font.pixelSize: 13
+                font.bold: true
+                color: sectionBox.panelTheme.muted
+            }
+
+            ColumnLayout {
+                id: contentColumn
+                Layout.fillWidth: true
+                spacing: 8
+            }
         }
     }
 }

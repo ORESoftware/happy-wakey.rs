@@ -1,144 +1,490 @@
 mod config;
 mod env_config;
+mod http;
 mod services;
 mod supabase;
 mod supabase_config;
 
-use once_cell::sync::Lazy;
-use qmetaobject::prelude::*;
-use qmetaobject::QObjectPinned;
-use std::cell::RefCell;
-use std::sync::mpsc;
-use std::sync::Mutex;
+use core::pin::Pin;
+use cxx_qt::Threading;
+use cxx_qt_lib::QString;
 
 // ---------------------------------------------------------------------------
-// Command channel — threads send results here, the Qt timer drains them
+// Rust <-> Qt bridge
+//
+// cxx-qt generates a real QObject from `BackendRust`. Properties are typed and
+// auto-emit `<name>Changed`; invokables are typed methods. Background work is
+// marshalled back to the GUI thread with `qt_thread().queue(...)` — no unsafe
+// pointers, no manual command channel, no polling timer.
 // ---------------------------------------------------------------------------
-enum Cmd {
-    LoginResult(Result<supabase::SupabaseSession, String>),
-    ConfigUpdated(config::Config, Option<String>),
-    OnboardingSynced(config::OnboardingState),
-    CalendarEvents(Vec<services::calendar::CalendarEvent>),
-    Weather(Vec<services::weather::WeatherData>),
-    Stocks(Vec<services::stocks::StockData>),
-    News(Vec<services::news::NewsItem>),
-    LoggedOut,
-    Status(String),
-}
-
-struct Chan {
-    tx: mpsc::Sender<Cmd>,
-    rx: Mutex<mpsc::Receiver<Cmd>>,
-}
-
-static CHAN: Lazy<Chan> = Lazy::new(|| {
-    let (tx, rx) = mpsc::channel();
-    Chan {
-        tx,
-        rx: Mutex::new(rx),
+#[cxx_qt::bridge]
+mod qobject {
+    extern "C++" {
+        include!("cxx-qt-lib/qstring.h");
+        type QString = cxx_qt_lib::QString;
     }
-});
 
-fn send_cmd(cmd: Cmd) {
-    let _ = CHAN.tx.send(cmd);
+    unsafe extern "C++" {
+        include!("webengine_shim.h");
+        #[rust_name = "init_web_engine"]
+        fn happy_init_web_engine();
+    }
+
+    extern "RustQt" {
+        #[qobject]
+        #[qml_element]
+        #[qml_singleton]
+        // Auth
+        #[qproperty(bool, logged_in)]
+        #[qproperty(QString, user_email)]
+        #[qproperty(QString, user_id)]
+        // Feed data (JSON payloads, parsed in QML)
+        #[qproperty(QString, calendar_json)]
+        #[qproperty(QString, weather_json)]
+        #[qproperty(QString, stocks_json)]
+        #[qproperty(bool, stocks_loading)]
+        #[qproperty(QString, news_json)]
+        // Config + onboarding
+        #[qproperty(QString, app_config_json)]
+        #[qproperty(QString, onboarding_json)]
+        // Status bar
+        #[qproperty(QString, status_msg)]
+        type Backend = super::BackendRust;
+
+        #[qinvokable]
+        fn startup(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn login(self: Pin<&mut Backend>, provider: &QString);
+        #[qinvokable]
+        fn logout(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn refresh_calendar(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn refresh_weather(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn refresh_stocks(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn refresh_news(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn save_config(self: Pin<&mut Backend>, json: &QString);
+        #[qinvokable]
+        fn save_onboarding_state(
+            self: Pin<&mut Backend>,
+            step: &QString,
+            step_index: i32,
+            completed: bool,
+        );
+        #[qinvokable]
+        fn open_url(self: Pin<&mut Backend>, url: &QString);
+        #[qinvokable]
+        fn set_status(self: Pin<&mut Backend>, msg: &QString);
+        #[qinvokable]
+        fn reload_config(self: Pin<&mut Backend>);
+    }
+
+    impl cxx_qt::Threading for Backend {}
 }
 
-// ---------------------------------------------------------------------------
-// Send-able raw pointer to the pinned Backend
-// ---------------------------------------------------------------------------
-struct SendBackendPtr(*const QObjectPinned<'static, Backend>);
-unsafe impl Send for SendBackendPtr {}
-unsafe impl Sync for SendBackendPtr {}
+// Convenient alias for the generated QObject type.
+use qobject::Backend;
+type BackendThread = cxx_qt::CxxQtThread<Backend>;
 
-static BACKEND_PTR: Mutex<Option<SendBackendPtr>> = Mutex::new(None);
-
-fn serialize_ui_config(config: &config::Config) -> QString {
-    QString::from(serde_json::to_string(&config::sync_safe_config(config)).unwrap_or_default())
+// The Rust-side state backing the QObject's properties.
+pub struct BackendRust {
+    logged_in: bool,
+    user_email: QString,
+    user_id: QString,
+    calendar_json: QString,
+    weather_json: QString,
+    stocks_json: QString,
+    stocks_loading: bool,
+    news_json: QString,
+    app_config_json: QString,
+    onboarding_json: QString,
+    status_msg: QString,
 }
 
-fn serialize_onboarding(state: &config::OnboardingState) -> QString {
-    QString::from(serde_json::to_string(state).unwrap_or_default())
-}
-
-fn apply_config_snapshot(backend: &mut Backend, config: &config::Config) {
-    backend.logged_in = config.supabase_session.is_some();
-    backend.user_id = QString::from(config.user_id.clone());
-    backend.user_email = QString::from(
-        config
+impl Default for BackendRust {
+    fn default() -> Self {
+        // env_config::init() runs in main() before the QML engine creates this
+        // singleton, so config::load() already sees the resolved environment.
+        let cfg = config::load();
+        let email = cfg
             .supabase_session
             .as_ref()
             .and_then(|s| s.email.clone())
-            .unwrap_or_default(),
-    );
-    backend.app_config_json = serialize_ui_config(config);
-    backend.onboarding_json = serialize_onboarding(&config.onboarding);
-    backend.auth_changed();
-    backend.config_changed();
-    backend.onboarding_changed();
+            .unwrap_or_default();
+        Self {
+            logged_in: cfg.supabase_session.is_some(),
+            user_email: QString::from(email.as_str()),
+            user_id: QString::from(cfg.user_id.as_str()),
+            calendar_json: QString::default(),
+            weather_json: QString::default(),
+            stocks_json: QString::default(),
+            stocks_loading: false,
+            news_json: QString::default(),
+            app_config_json: serialize_ui_config(&cfg),
+            onboarding_json: serialize_onboarding(&cfg.onboarding),
+            status_msg: QString::default(),
+        }
+    }
 }
 
-fn sync_config_to_supabase(config: &config::Config) {
-    if !config.supabase_sync_enabled {
-        return;
+// ---------------------------------------------------------------------------
+// Invokable implementations
+// ---------------------------------------------------------------------------
+impl qobject::Backend {
+    /// Called once from MainWindow.qml on completion: pull onboarding state from
+    /// Supabase (if signed in) and merge it in.
+    fn startup(self: Pin<&mut Self>) {
+        let cfg = config::load();
+        hydrate_onboarding(self, &cfg);
     }
 
-    let Some(session) = &config.supabase_session else {
-        return;
-    };
+    fn login(self: Pin<&mut Self>, provider: &QString) {
+        let provider = provider.to_string();
+        match supabase::normalize_provider(&provider) {
+            Ok(p) => {
+                let thread = self.qt_thread();
+                std::thread::spawn(move || {
+                    let result = supabase::login_with_provider(&p);
+                    thread.queue(move |b| on_login_result(b, result)).ok();
+                });
+            }
+            Err(e) => emit_status(self, e),
+        }
+    }
 
-    let access_token = session.access_token.clone();
-    let snapshot = config.clone();
-    std::thread::spawn(move || {
-        if let Err(e) = supabase_config::save_config(&access_token, &snapshot) {
-            send_cmd(Cmd::Status(format!("Supabase config sync failed: {e}")));
+    fn logout(mut self: Pin<&mut Self>) {
+        let mut cfg = config::load();
+        cfg.supabase_session = None;
+        if let Err(e) = config::save(&cfg) {
+            emit_status(self.as_mut(), format!("Logout config save failed: {e}"));
         }
-        if let Err(e) = supabase_config::save_onboarding_state(&access_token, &snapshot.onboarding) {
-            send_cmd(Cmd::Status(format!("Supabase onboarding sync failed: {e}")));
+        apply_config_snapshot(self.as_mut(), &cfg);
+        emit_status(self, "Logged out".to_string());
+    }
+
+    fn refresh_calendar(self: Pin<&mut Self>) {
+        let cfg = config::load();
+        let Some(session) = cfg.supabase_session.clone() else {
+            emit_status(self, "Sign in before refreshing calendars".to_string());
+            return;
+        };
+
+        // Calendar APIs need the *provider's* OAuth token, not the Supabase JWT.
+        let Some(provider_token) = session
+            .provider_token
+            .clone()
+            .filter(|t| !t.trim().is_empty())
+        else {
+            emit_status(
+                self,
+                "Calendar access wasn't granted at sign-in. Sign out and sign back in to allow calendar access.".to_string(),
+            );
+            return;
+        };
+
+        let provider = session.provider.clone();
+        let thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = match provider.as_str() {
+                "google" => services::calendar::fetch_google_events(&provider_token),
+                "azure" => services::calendar::fetch_outlook_events(&provider_token),
+                "apple" => Err("Apple sign-in doesn't provide a calendar API".to_string()),
+                other => Err(format!("Calendar sync isn't supported for '{other}' sign-in")),
+            };
+            thread
+                .queue(move |b| match result {
+                    Ok(events) => b.set_calendar_json(json_qstring(&events)),
+                    Err(e) => emit_status(b, format!("Calendar refresh failed: {e}")),
+                })
+                .ok();
+        });
+    }
+
+    fn refresh_weather(self: Pin<&mut Self>) {
+        let cfg = config::load();
+        let locs = cfg.weather_locations.clone();
+        let thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let mut data = Vec::new();
+            let mut errors = Vec::new();
+            for loc in &locs {
+                match services::weather::fetch_weather(loc.lat, loc.lon, &loc.name) {
+                    Ok(w) => data.push(w),
+                    Err(e) => errors.push(format!("{}: {}", loc.name, e)),
+                }
+            }
+            thread
+                .queue(move |mut b| {
+                    b.as_mut().set_weather_json(json_qstring(&data));
+                    if !errors.is_empty() {
+                        emit_status(b, errors.join("; "));
+                    }
+                })
+                .ok();
+        });
+    }
+
+    fn refresh_stocks(mut self: Pin<&mut Self>) {
+        // A stocks refresh is a sequential sweep of up to 20 symbols (2 requests
+        // each). Guard against overlapping sweeps — a second trigger while one is
+        // in flight is a no-op rather than another ~40-request burst (which also
+        // risks tripping Finnhub's free-tier rate limit).
+        if *self.stocks_loading() {
+            return;
         }
-    });
+        self.as_mut().set_stocks_loading(true);
+        let cfg = config::load();
+        let syms = cfg.stock_symbols.clone();
+        let thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let mut data = Vec::new();
+            let mut errors = Vec::new();
+            for sym in &syms {
+                match services::stocks::fetch_stock(sym) {
+                    Ok(s) => data.push(s),
+                    Err(e) => errors.push(format!("{sym}: {e}")),
+                }
+            }
+            thread
+                .queue(move |mut b| {
+                    b.as_mut().set_stocks_json(json_qstring(&data));
+                    b.as_mut().set_stocks_loading(false);
+                    if !errors.is_empty() {
+                        emit_status(b, errors.join("; "));
+                    }
+                })
+                .ok();
+        });
+    }
+
+    fn refresh_news(self: Pin<&mut Self>) {
+        let cfg = config::load();
+        let kw = cfg.news_keywords.clone();
+        let thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = services::news::fetch_news(&kw);
+            thread
+                .queue(move |b| match result {
+                    Ok(news) => b.set_news_json(json_qstring(&news)),
+                    Err(e) => emit_status(b, e),
+                })
+                .ok();
+        });
+    }
+
+    fn save_config(mut self: Pin<&mut Self>, json: &QString) {
+        let s = json.to_string();
+        match serde_json::from_str::<config::Config>(&s) {
+            Ok(incoming) => {
+                let current = config::load();
+                let cfg = config::merge_editable_config(current, incoming);
+                match config::save(&cfg) {
+                    Ok(()) => {
+                        sync_config_to_supabase(&cfg, self.qt_thread());
+                        apply_config_snapshot(self.as_mut(), &cfg);
+                        emit_status(self, "Config saved".to_string());
+                    }
+                    Err(e) => emit_status(self, format!("Config save failed: {e}")),
+                }
+            }
+            Err(_) => emit_status(self, "Invalid config JSON".to_string()),
+        }
+    }
+
+    fn save_onboarding_state(
+        self: Pin<&mut Self>,
+        step: &QString,
+        step_index: i32,
+        completed: bool,
+    ) {
+        let cfg = config::set_onboarding_state(
+            config::load(),
+            &step.to_string(),
+            step_index,
+            completed,
+        );
+        match config::save(&cfg) {
+            Ok(()) => {
+                sync_onboarding_to_supabase(&cfg, self.qt_thread());
+                apply_config_snapshot(self, &cfg);
+            }
+            Err(e) => emit_status(self, format!("Onboarding save failed: {e}")),
+        }
+    }
+
+    fn open_url(self: Pin<&mut Self>, url: &QString) {
+        match safe_external_url(&url.to_string()) {
+            Ok(url) => {
+                if let Err(e) = webbrowser::open(url.as_str()) {
+                    emit_status(self, format!("Failed to open URL: {e}"));
+                }
+            }
+            Err(e) => emit_status(self, e),
+        }
+    }
+
+    fn set_status(self: Pin<&mut Self>, msg: &QString) {
+        emit_status(self, msg.to_string());
+    }
+
+    fn reload_config(mut self: Pin<&mut Self>) {
+        let cfg = config::load();
+        apply_config_snapshot(self.as_mut(), &cfg);
+        emit_status(self, "Config reloaded".to_string());
+    }
 }
 
-fn sync_onboarding_to_supabase(config: &config::Config) {
-    if !config.supabase_sync_enabled {
-        return;
-    }
-
-    let Some(session) = &config.supabase_session else {
-        return;
-    };
-
-    let access_token = session.access_token.clone();
-    let state = config.onboarding.clone();
-    std::thread::spawn(move || {
-        if let Err(e) = supabase_config::save_onboarding_state(&access_token, &state) {
-            send_cmd(Cmd::Status(format!("Supabase onboarding sync failed: {e}")));
-        }
-    });
+// ---------------------------------------------------------------------------
+// Helpers operating on the pinned QObject (run on the GUI thread)
+// ---------------------------------------------------------------------------
+fn emit_status(mut b: Pin<&mut Backend>, msg: String) {
+    b.as_mut().set_status_msg(QString::from(msg.as_str()));
 }
 
-fn hydrate_onboarding_from_supabase(config: &config::Config) {
-    let Some(session) = &config.supabase_session else {
-        return;
-    };
+fn json_qstring<T: serde::Serialize>(value: &T) -> QString {
+    QString::from(serde_json::to_string(value).unwrap_or_default().as_str())
+}
 
-    if !config.supabase_sync_enabled {
+fn serialize_ui_config(config: &config::Config) -> QString {
+    json_qstring(&config::sync_safe_config(config))
+}
+
+fn serialize_onboarding(state: &config::OnboardingState) -> QString {
+    json_qstring(state)
+}
+
+fn apply_config_snapshot(mut b: Pin<&mut Backend>, cfg: &config::Config) {
+    b.as_mut().set_logged_in(cfg.supabase_session.is_some());
+    b.as_mut().set_user_id(QString::from(cfg.user_id.as_str()));
+    let email = cfg
+        .supabase_session
+        .as_ref()
+        .and_then(|s| s.email.clone())
+        .unwrap_or_default();
+    b.as_mut().set_user_email(QString::from(email.as_str()));
+    b.as_mut().set_app_config_json(serialize_ui_config(cfg));
+    b.as_mut().set_onboarding_json(serialize_onboarding(&cfg.onboarding));
+}
+
+fn on_login_result(mut b: Pin<&mut Backend>, result: Result<supabase::SupabaseSession, String>) {
+    match result {
+        Ok(session) => {
+            let mut cfg = config::load();
+            cfg.user_id = session.user_id.clone();
+            cfg.supabase_session = Some(config::SupabaseSession {
+                access_token: session.access_token,
+                refresh_token: session.refresh_token,
+                expires_at: session.expires_at,
+                user_id: session.user_id,
+                email: session.email,
+                provider: session.provider,
+                provider_token: session.provider_token,
+                provider_refresh_token: session.provider_refresh_token,
+            });
+            if let Err(e) = config::save(&cfg) {
+                emit_status(
+                    b.as_mut(),
+                    format!("Login saved locally, but config save failed: {e}"),
+                );
+            }
+            sync_config_to_supabase(&cfg, b.qt_thread());
+            hydrate_onboarding(b.as_mut(), &cfg);
+            apply_config_snapshot(b.as_mut(), &cfg);
+            emit_status(b, "Logged in".to_string());
+        }
+        Err(e) => emit_status(b, format!("Login failed: {e}")),
+    }
+}
+
+fn on_onboarding_synced(mut b: Pin<&mut Backend>, remote_state: config::OnboardingState) {
+    let mut cfg = config::load();
+    cfg.onboarding = remote_state;
+    match config::save(&cfg) {
+        Ok(()) => {
+            apply_config_snapshot(b.as_mut(), &cfg);
+            sync_onboarding_to_supabase(&cfg, b.qt_thread());
+        }
+        Err(e) => emit_status(b, format!("Onboarding sync save failed: {e}")),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Background sync helpers (own thread; report failures back via the GUI thread)
+// ---------------------------------------------------------------------------
+fn hydrate_onboarding(b: Pin<&mut Backend>, cfg: &config::Config) {
+    if !cfg.supabase_sync_enabled {
         return;
     }
-
+    let Some(session) = cfg.supabase_session.as_ref() else {
+        return;
+    };
     let access_token = session.access_token.clone();
-    let local_state = config.onboarding.clone();
+    let local_state = cfg.onboarding.clone();
+    let thread = b.qt_thread();
     std::thread::spawn(move || match supabase_config::fetch_onboarding_state(&access_token) {
-        Ok(Some(remote)) => send_cmd(Cmd::OnboardingSynced(config::merge_onboarding(
-            &local_state,
-            &remote,
-        ))),
+        Ok(Some(remote)) => {
+            let merged = config::merge_onboarding(&local_state, &remote);
+            thread.queue(move |b| on_onboarding_synced(b, merged)).ok();
+        }
         Ok(None) => {
             let _ = supabase_config::save_onboarding_state(&access_token, &local_state);
         }
-        Err(e) => send_cmd(Cmd::Status(format!("Supabase onboarding fetch failed: {e}"))),
+        Err(e) => {
+            thread
+                .queue(move |b| emit_status(b, format!("Supabase onboarding fetch failed: {e}")))
+                .ok();
+        }
     });
 }
 
+fn sync_config_to_supabase(cfg: &config::Config, thread: BackendThread) {
+    if !cfg.supabase_sync_enabled {
+        return;
+    }
+    let Some(session) = cfg.supabase_session.as_ref() else {
+        return;
+    };
+    let access_token = session.access_token.clone();
+    let snapshot = cfg.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = supabase_config::save_config(&access_token, &snapshot) {
+            thread
+                .clone()
+                .queue(move |b| emit_status(b, format!("Supabase config sync failed: {e}")))
+                .ok();
+        }
+        if let Err(e) = supabase_config::save_onboarding_state(&access_token, &snapshot.onboarding) {
+            thread
+                .queue(move |b| emit_status(b, format!("Supabase onboarding sync failed: {e}")))
+                .ok();
+        }
+    });
+}
+
+fn sync_onboarding_to_supabase(cfg: &config::Config, thread: BackendThread) {
+    if !cfg.supabase_sync_enabled {
+        return;
+    }
+    let Some(session) = cfg.supabase_session.as_ref() else {
+        return;
+    };
+    let access_token = session.access_token.clone();
+    let state = cfg.onboarding.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = supabase_config::save_onboarding_state(&access_token, &state) {
+            thread
+                .queue(move |b| emit_status(b, format!("Supabase onboarding sync failed: {e}")))
+                .ok();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// URL safety (shared by open_url + tests)
+// ---------------------------------------------------------------------------
 fn safe_external_url(raw: &str) -> Result<url::Url, String> {
     let mut input = raw.trim().to_string();
     if input.is_empty() || input.len() > 2048 {
@@ -155,375 +501,50 @@ fn safe_external_url(raw: &str) -> Result<url::Url, String> {
     Ok(parsed)
 }
 
-fn qml_main_path() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("HAPPY_WAKEY_QML_DIR") {
-        let path = std::path::PathBuf::from(dir).join("MainWindow.qml");
-        if path.exists() {
-            return path;
-        }
-    }
-
-    let cwd_path = std::env::current_dir()
-        .unwrap_or_default()
-        .join("qml")
-        .join("MainWindow.qml");
-    if cwd_path.exists() {
-        return cwd_path;
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            let candidates = [
-                exe_dir.join("qml").join("MainWindow.qml"),
-                exe_dir.join("../Resources/qml/MainWindow.qml"),
-                exe_dir.join("../../qml/MainWindow.qml"),
-            ];
-            for candidate in candidates {
-                if candidate.exists() {
-                    return candidate;
-                }
-            }
-        }
-    }
-
-    cwd_path
-}
-
-// ---------------------------------------------------------------------------
-// Backend — Rust ⇄ QML bridge
-// ---------------------------------------------------------------------------
-
-#[derive(Default, QObject)]
-struct Backend {
-    base: qt_base_class!(trait QObject),
-
-    // Auth
-    logged_in: qt_property!(bool; NOTIFY auth_changed),
-    auth_changed: qt_signal!(),
-    user_email: qt_property!(QString; NOTIFY auth_changed),
-    user_id: qt_property!(QString; NOTIFY auth_changed),
-
-    // Calendar
-    calendar_json: qt_property!(QString; NOTIFY calendar_changed),
-    calendar_changed: qt_signal!(),
-
-    // Weather
-    weather_json: qt_property!(QString; NOTIFY weather_changed),
-    weather_changed: qt_signal!(),
-
-    // Stocks
-    stocks_json: qt_property!(QString; NOTIFY stocks_changed),
-    stocks_changed: qt_signal!(),
-    stocks_loading: qt_property!(bool; NOTIFY stocks_changed),
-
-    // News
-    news_json: qt_property!(QString; NOTIFY news_changed),
-    news_changed: qt_signal!(),
-
-    // Browser tabs (JSON)
-    browser_tabs_json: qt_property!(QString; NOTIFY browser_changed),
-    browser_changed: qt_signal!(),
-
-    // Config
-    app_config_json: qt_property!(QString; NOTIFY config_changed),
-    config_changed: qt_signal!(),
-
-    // Onboarding
-    onboarding_json: qt_property!(QString; NOTIFY onboarding_changed),
-    onboarding_changed: qt_signal!(),
-
-    // Status bar
-    status_msg: qt_property!(QString; NOTIFY status_changed),
-    status_changed: qt_signal!(),
-
-    // ── QML-invokable methods ──
-
-    login: qt_method!(fn login(&self, provider: QString) {
-        match supabase::normalize_provider(&provider.to_string()) {
-            Ok(p) => {
-                std::thread::spawn(move || {
-                    let result = supabase::login_with_provider(&p);
-                    send_cmd(Cmd::LoginResult(result));
-                });
-            }
-            Err(e) => send_cmd(Cmd::Status(e)),
-        }
-    }),
-
-    logout: qt_method!(fn logout(&self) {
-        let mut cfg = config::load();
-        cfg.supabase_session = None;
-        let _ = config::save(&cfg);
-        send_cmd(Cmd::LoggedOut);
-    }),
-
-    refresh_calendar: qt_method!(fn refresh_calendar(&self) {
-        let cfg = config::load();
-        if let Some(ref s) = cfg.supabase_session {
-            let at = s.access_token.clone();
-            std::thread::spawn(move || {
-                let mut all = Vec::new();
-                let mut errors = Vec::new();
-                match services::calendar::fetch_google_events(&at) {
-                    Ok(ev) => all.extend(ev),
-                    Err(e) => errors.push(e),
-                }
-                match services::calendar::fetch_outlook_events(&at) {
-                    Ok(ev) => all.extend(ev),
-                    Err(e) => errors.push(e),
-                }
-                if !errors.is_empty() {
-                    send_cmd(Cmd::Status(errors.join("; ")));
-                }
-                send_cmd(Cmd::CalendarEvents(all));
-            });
-        } else {
-            send_cmd(Cmd::Status("Sign in before refreshing calendars".into()));
-        }
-    }),
-
-    refresh_weather: qt_method!(fn refresh_weather(&self) {
-        let cfg = config::load();
-        let locs = cfg.weather_locations.clone();
-        std::thread::spawn(move || {
-            let mut data = Vec::new();
-            let mut errors = Vec::new();
-            for loc in &locs {
-                match services::weather::fetch_weather(loc.lat, loc.lon, &loc.name) {
-                    Ok(w) => data.push(w),
-                    Err(e) => errors.push(format!("{}: {}", loc.name, e)),
-                }
-            }
-            if !errors.is_empty() {
-                send_cmd(Cmd::Status(errors.join("; ")));
-            }
-            send_cmd(Cmd::Weather(data));
-        });
-    }),
-
-    refresh_stocks: qt_method!(fn refresh_stocks(&self) {
-        let cfg = config::load();
-        let syms = cfg.stock_symbols.clone();
-        std::thread::spawn(move || {
-            let mut data = Vec::new();
-            let mut errors = Vec::new();
-            for sym in &syms {
-                match services::stocks::fetch_stock(sym) {
-                    Ok(s) => data.push(s),
-                    Err(e) => errors.push(format!("{sym}: {e}")),
-                }
-            }
-            if !errors.is_empty() {
-                send_cmd(Cmd::Status(errors.join("; ")));
-            }
-            send_cmd(Cmd::Stocks(data));
-        });
-    }),
-
-    refresh_news: qt_method!(fn refresh_news(&self) {
-        let cfg = config::load();
-        let kw = cfg.news_keywords.clone();
-        std::thread::spawn(move || match services::news::fetch_news(&kw) {
-            Ok(news) => send_cmd(Cmd::News(news)),
-            Err(e) => send_cmd(Cmd::Status(e)),
-        });
-    }),
-
-    save_config: qt_method!(fn save_config(&self, json: QString) {
-        let s = json.to_string();
-        match serde_json::from_str::<config::Config>(&s) {
-            Ok(incoming) => {
-                let current = config::load();
-                let cfg = config::merge_editable_config(current, incoming);
-                match config::save(&cfg) {
-                    Ok(()) => {
-                        sync_config_to_supabase(&cfg);
-                        send_cmd(Cmd::ConfigUpdated(cfg, Some("Config saved".into())));
-                    }
-                    Err(e) => send_cmd(Cmd::Status(format!("Config save failed: {e}"))),
-                }
-            }
-            Err(_) => send_cmd(Cmd::Status("Invalid config JSON".into())),
-        }
-    }),
-
-    save_onboarding_state: qt_method!(fn save_onboarding_state(&self, step: QString, step_index: i32, completed: bool) {
-        let cfg = config::set_onboarding_state(
-            config::load(),
-            &step.to_string(),
-            step_index,
-            completed,
-        );
-        match config::save(&cfg) {
-            Ok(()) => {
-                sync_onboarding_to_supabase(&cfg);
-                send_cmd(Cmd::ConfigUpdated(cfg, None));
-            }
-            Err(e) => send_cmd(Cmd::Status(format!("Onboarding save failed: {e}"))),
-        }
-    }),
-
-    open_url: qt_method!(fn open_url(&self, url: QString) {
-        match safe_external_url(&url.to_string()) {
-            Ok(url) => {
-                if let Err(e) = webbrowser::open(url.as_str()) {
-                    send_cmd(Cmd::Status(format!("Failed to open URL: {e}")));
-                }
-            }
-            Err(e) => send_cmd(Cmd::Status(e)),
-        }
-    }),
-
-    set_status: qt_method!(fn set_status(&self, msg: QString) {
-        send_cmd(Cmd::Status(msg.to_string()));
-    }),
-
-    reload_config: qt_method!(fn reload_config(&self) {
-        send_cmd(Cmd::ConfigUpdated(config::load(), Some("Config reloaded".into())));
-    }),
-}
-
-// ---------------------------------------------------------------------------
-// Polling timer — runs on Qt thread, drains the command channel
-// ---------------------------------------------------------------------------
-
-fn poll_tick() {
-    process_cmds();
-    qmetaobject::single_shot(std::time::Duration::from_millis(120), poll_tick);
-}
-
-fn process_cmds() {
-    let ptr = BACKEND_PTR.lock().unwrap();
-    let Some(SendBackendPtr(p)) = *ptr else { return };
-    let rx = CHAN.rx.lock().unwrap();
-    while let Ok(cmd) = rx.try_recv() {
-        unsafe {
-            let backend = &*p;
-            let mut b = backend.borrow_mut();
-            match cmd {
-                Cmd::LoginResult(Ok(session)) => {
-                    let mut cfg = config::load();
-                    cfg.user_id = session.user_id.clone();
-                    cfg.supabase_session = Some(config::SupabaseSession {
-                        access_token: session.access_token,
-                        refresh_token: session.refresh_token,
-                        expires_at: session.expires_at,
-                        user_id: session.user_id,
-                        email: session.email,
-                    });
-                    if let Err(e) = config::save(&cfg) {
-                        b.status_msg = QString::from(format!("Login saved locally, but config save failed: {e}"));
-                        b.status_changed();
-                    }
-
-                    sync_config_to_supabase(&cfg);
-                    hydrate_onboarding_from_supabase(&cfg);
-                    apply_config_snapshot(&mut b, &cfg);
-                    b.status_msg = QString::from("Logged in");
-                    b.status_changed();
-                }
-                Cmd::LoginResult(Err(e)) => {
-                    b.status_msg = QString::from(format!("Login failed: {e}"));
-                    b.status_changed();
-                }
-                Cmd::ConfigUpdated(cfg, status) => {
-                    apply_config_snapshot(&mut b, &cfg);
-                    if let Some(status) = status {
-                        b.status_msg = QString::from(status);
-                        b.status_changed();
-                    }
-                }
-                Cmd::OnboardingSynced(remote_state) => {
-                    let mut cfg = config::load();
-                    cfg.onboarding = remote_state;
-                    match config::save(&cfg) {
-                        Ok(()) => {
-                            apply_config_snapshot(&mut b, &cfg);
-                            sync_onboarding_to_supabase(&cfg);
-                        }
-                        Err(e) => {
-                            b.status_msg = QString::from(format!("Onboarding sync save failed: {e}"));
-                            b.status_changed();
-                        }
-                    }
-                }
-                Cmd::CalendarEvents(events) => {
-                    b.calendar_json =
-                        QString::from(serde_json::to_string(&events).unwrap_or_default());
-                    b.calendar_changed();
-                }
-                Cmd::Weather(data) => {
-                    b.weather_json =
-                        QString::from(serde_json::to_string(&data).unwrap_or_default());
-                    b.weather_changed();
-                }
-                Cmd::Stocks(data) => {
-                    b.stocks_json =
-                        QString::from(serde_json::to_string(&data).unwrap_or_default());
-                    b.stocks_loading = false;
-                    b.stocks_changed();
-                }
-                Cmd::News(data) => {
-                    b.news_json =
-                        QString::from(serde_json::to_string(&data).unwrap_or_default());
-                    b.news_changed();
-                }
-                Cmd::LoggedOut => {
-                    let mut cfg = config::load();
-                    cfg.supabase_session = None;
-                    if let Err(e) = config::save(&cfg) {
-                        b.status_msg = QString::from(format!("Logout config save failed: {e}"));
-                        b.status_changed();
-                    }
-                    apply_config_snapshot(&mut b, &cfg);
-                    b.status_msg = QString::from("Logged out");
-                    b.status_changed();
-                }
-                Cmd::Status(msg) => {
-                    b.status_msg = QString::from(msg);
-                    b.status_changed();
-                }
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
-
 fn main() {
     env_config::init();
 
-    let cfg = config::load();
-    let mut engine = QmlEngine::new();
+    // WebEngine must be initialized before the QML engine loads a WebEngineView.
+    qobject::init_web_engine();
 
-    // Create the backend inside a 'static RefCell so QObjectPinned can borrow it forever
-    let backend_refcell: &'static RefCell<Backend> =
-        Box::leak(Box::new(RefCell::new(Backend::default())));
-    let backend = unsafe { QObjectPinned::new(backend_refcell) };
+    let mut app = cxx_qt_lib::QGuiApplication::new();
+    let mut engine = cxx_qt_lib::QQmlApplicationEngine::new();
 
-    // Restore session state
-    {
-        let mut b = backend.borrow_mut();
-        apply_config_snapshot(&mut b, &cfg);
+    if let Some(engine) = engine.as_mut() {
+        engine.load(&cxx_qt_lib::QUrl::from(&QString::from(
+            "qrc:/qt/qml/com/happywakey/qml/MainWindow.qml",
+        )));
     }
 
-    // Store raw pointer for the poll timer
-    *BACKEND_PTR.lock().unwrap() = Some(SendBackendPtr(
-        &backend as *const QObjectPinned<'static, Backend>,
-    ));
-    hydrate_onboarding_from_supabase(&cfg);
+    if let Some(app) = app.as_mut() {
+        app.exec();
+    }
+}
 
-    // Hand the backend to QML as a context property
-    engine.set_object_property(QString::from("backend"), backend);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    // Start the polling timer
-    qmetaobject::single_shot(std::time::Duration::from_millis(120), poll_tick);
+    #[test]
+    fn safe_external_url_adds_scheme_and_accepts_http_s() {
+        assert_eq!(
+            safe_external_url("example.com").unwrap().as_str(),
+            "https://example.com/"
+        );
+        assert!(safe_external_url("http://example.com/path").is_ok());
+        assert!(safe_external_url("  https://example.com  ").is_ok());
+    }
 
-    // Load the main window
-    let qml_path = qml_main_path();
-    engine.load_file(QString::from(qml_path.to_string_lossy().as_ref()));
-
-    engine.exec();
+    #[test]
+    fn safe_external_url_rejects_dangerous_or_empty() {
+        assert!(safe_external_url("").is_err());
+        assert!(safe_external_url("   ").is_err());
+        assert!(safe_external_url("javascript:alert(1)").is_err());
+        assert!(safe_external_url("file:///etc/passwd").is_err());
+        assert!(safe_external_url("ftp://example.com").is_err());
+        assert!(safe_external_url(&format!("https://{}", "a".repeat(3000))).is_err());
+    }
 }

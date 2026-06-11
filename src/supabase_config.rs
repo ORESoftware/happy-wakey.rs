@@ -1,21 +1,13 @@
 use crate::config::{self, Config, OnboardingState};
 use reqwest::blocking::Client;
-use std::time::Duration;
 use url::Url;
 
 fn supabase_url() -> String {
-    std::env::var("SUPABASE_URL").unwrap_or_else(|_| "https://gtbeuxcolbpuipvqiibn.supabase.co".into())
+    std::env::var("SUPABASE_URL").unwrap_or_else(|_| "https://vgzyyfhnendriyrhakkp.supabase.co".into())
 }
 
 fn anon_key() -> String {
     std::env::var("SUPABASE_ANON_KEY").unwrap_or_default()
-}
-
-fn client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to build Supabase client: {e}"))
 }
 
 fn authed_user_id(client: &Client, access_token: &str) -> Result<String, String> {
@@ -46,8 +38,8 @@ fn rest_url(path: &str) -> Result<Url, String> {
 /// Fetch config from Supabase for the given user
 #[allow(dead_code)]
 pub fn fetch_config(access_token: &str) -> Result<Config, String> {
-    let client = client()?;
-    let user_id = authed_user_id(&client, access_token)?;
+    let client = crate::http::shared_client();
+    let user_id = authed_user_id(client, access_token)?;
 
     // Fetch config from the user_config table
     let mut url = rest_url("user_config")?;
@@ -82,8 +74,8 @@ pub fn fetch_config(access_token: &str) -> Result<Config, String> {
 
 /// Save config to Supabase for the given user
 pub fn save_config(access_token: &str, config: &Config) -> Result<(), String> {
-    let client = client()?;
-    let user_id = authed_user_id(&client, access_token)?;
+    let client = crate::http::shared_client();
+    let user_id = authed_user_id(client, access_token)?;
     let config_json = serde_json::to_value(config::sync_safe_config(config)).map_err(|e| e.to_string())?;
 
     let body = serde_json::json!({
@@ -110,8 +102,8 @@ pub fn save_config(access_token: &str, config: &Config) -> Result<(), String> {
 }
 
 pub fn fetch_onboarding_state(access_token: &str) -> Result<Option<OnboardingState>, String> {
-    let client = client()?;
-    let user_id = authed_user_id(&client, access_token)?;
+    let client = crate::http::shared_client();
+    let user_id = authed_user_id(client, access_token)?;
 
     let mut url = rest_url("user_onboarding_state")?;
     url.query_pairs_mut()
@@ -139,8 +131,8 @@ pub fn save_onboarding_state(
     access_token: &str,
     state: &OnboardingState,
 ) -> Result<(), String> {
-    let client = client()?;
-    let user_id = authed_user_id(&client, access_token)?;
+    let client = crate::http::shared_client();
+    let user_id = authed_user_id(client, access_token)?;
     let state = config::sanitize_onboarding_state(state.clone());
 
     let body = serde_json::json!({

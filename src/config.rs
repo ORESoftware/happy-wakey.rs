@@ -33,6 +33,9 @@ pub struct SupabaseSession {
     pub expires_at: i64,
     pub user_id: String,
     pub email: Option<String>,
+    pub provider: String,
+    pub provider_token: Option<String>,
+    pub provider_refresh_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +79,9 @@ impl Default for SupabaseSession {
             expires_at: 0,
             user_id: String::new(),
             email: None,
+            provider: String::new(),
+            provider_token: None,
+            provider_refresh_token: None,
         }
     }
 }
@@ -111,10 +117,13 @@ impl Default for Config {
             supabase_session: None,
             calendar_providers: Vec::new(),
             weather_locations: Vec::new(),
+            // Finnhub's free /quote endpoint prices US equities and ETFs, but not
+            // "BTC-USD"-style crypto pseudo-tickers (those need e.g. BINANCE:BTCUSDT),
+            // so the default watchlist sticks to symbols that actually return data.
             stock_symbols: vec![
                 "AAPL".into(), "GOOGL".into(), "MSFT".into(), "AMZN".into(), "NVDA".into(),
                 "META".into(), "TSLA".into(), "SPY".into(), "QQQ".into(), "GLD".into(),
-                "BTC-USD".into(), "ETH-USD".into(), "JPM".into(), "V".into(), "KO".into(),
+                "AMD".into(), "WMT".into(), "JPM".into(), "V".into(), "KO".into(),
                 "DIS".into(), "NFLX".into(), "BA".into(), "XOM".into(), "PG".into(),
             ],
             news_keywords: vec!["technology".into(), "AI".into(), "markets".into()],
@@ -254,6 +263,9 @@ pub fn sanitize(mut config: Config) -> Config {
     if let Some(mut session) = config.supabase_session {
         session.user_id = clean_text(&session.user_id, 128);
         session.email = session.email.map(|email| clean_text(&email, 254));
+        session.provider = clean_text(&session.provider, 32);
+        // Tokens are deliberately left untouched: they are opaque and must not be
+        // trimmed or length-clamped.
         config.supabase_session = Some(session);
     }
 
@@ -416,4 +428,232 @@ fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_symbol_normalizes_and_validates() {
+        assert_eq!(sanitize_symbol(" aapl "), Some("AAPL".to_string()));
+        assert_eq!(sanitize_symbol("brk.b"), Some("BRK.B".to_string()));
+        assert_eq!(sanitize_symbol("btc-usd"), Some("BTC-USD".to_string()));
+        assert_eq!(sanitize_symbol(""), None);
+        assert_eq!(sanitize_symbol("has space"), None);
+        assert_eq!(sanitize_symbol("bad$"), None);
+        assert_eq!(sanitize_symbol(&"A".repeat(25)), None);
+    }
+
+    #[test]
+    fn clean_text_strips_controls_trims_and_truncates() {
+        assert_eq!(clean_text("  hi\nthere\t ", 100), "hithere");
+        assert_eq!(clean_text("abcdef", 3), "abc");
+        // truncation is by characters, not bytes
+        assert_eq!(clean_text("héllo", 2), "hé");
+    }
+
+    #[test]
+    fn sanitize_clamps_collection_sizes() {
+        let mut cfg = Config::default();
+        cfg.stock_symbols = (0..50).map(|i| format!("SYM{i}")).collect();
+        cfg.news_keywords = (0..50).map(|i| format!("kw{i}")).collect();
+        cfg.weather_locations = (0..20)
+            .map(|i| WeatherLocation { name: format!("L{i}"), lat: 1.0, lon: 2.0 })
+            .collect();
+        let cfg = sanitize(cfg);
+        assert_eq!(cfg.stock_symbols.len(), 20);
+        assert_eq!(cfg.news_keywords.len(), 20);
+        assert_eq!(cfg.weather_locations.len(), 5);
+    }
+
+    #[test]
+    fn sanitize_drops_empty_news_keywords() {
+        let mut cfg = Config::default();
+        cfg.news_keywords = vec!["  ".into(), "tech".into(), "".into()];
+        let cfg = sanitize(cfg);
+        assert_eq!(cfg.news_keywords, vec!["tech".to_string()]);
+    }
+
+    #[test]
+    fn sanitize_weather_location_rejects_out_of_range() {
+        assert!(sanitize_weather_location(WeatherLocation {
+            name: "x".into(),
+            lat: 91.0,
+            lon: 0.0,
+        })
+        .is_none());
+        assert!(sanitize_weather_location(WeatherLocation {
+            name: "x".into(),
+            lat: 0.0,
+            lon: 181.0,
+        })
+        .is_none());
+        assert!(sanitize_weather_location(WeatherLocation {
+            name: "x".into(),
+            lat: f64::NAN,
+            lon: 0.0,
+        })
+        .is_none());
+        assert!(sanitize_weather_location(WeatherLocation {
+            name: "  ".into(),
+            lat: 0.0,
+            lon: 0.0,
+        })
+        .is_none());
+        assert!(sanitize_weather_location(WeatherLocation {
+            name: " Chicago ".into(),
+            lat: 41.88,
+            lon: -87.63,
+        })
+        .is_some());
+    }
+
+    #[test]
+    fn normalize_http_url_behaviour() {
+        assert_eq!(
+            normalize_http_url("example.com").as_deref(),
+            Some("https://example.com/")
+        );
+        assert!(normalize_http_url("http://example.com").is_some());
+        assert!(normalize_http_url("ftp://example.com").is_none());
+        assert!(normalize_http_url("javascript:alert(1)").is_none());
+        assert!(normalize_http_url("   ").is_none());
+        assert!(normalize_http_url(&format!("https://{}", "a".repeat(3000))).is_none());
+    }
+
+    #[test]
+    fn merge_editable_config_preserves_identity_and_session() {
+        let mut current = Config::default();
+        current.user_id = "user-123".into();
+        current.supabase_session = Some(SupabaseSession {
+            access_token: "keep-me".into(),
+            provider: "google".into(),
+            provider_token: Some("g-token".into()),
+            ..Default::default()
+        });
+
+        let mut incoming = Config::default();
+        // A malicious/stale client tries to overwrite identity + inject a session.
+        incoming.user_id = "attacker".into();
+        incoming.supabase_session = Some(SupabaseSession {
+            access_token: "evil".into(),
+            ..Default::default()
+        });
+        incoming.stock_symbols = vec!["TSLA".into()];
+
+        let merged = merge_editable_config(current, incoming);
+        assert_eq!(merged.user_id, "user-123");
+        let session = merged.supabase_session.expect("session preserved");
+        assert_eq!(session.access_token, "keep-me");
+        assert_eq!(session.provider_token.as_deref(), Some("g-token"));
+        assert_eq!(merged.stock_symbols, vec!["TSLA".to_string()]);
+    }
+
+    #[test]
+    fn sync_safe_config_strips_secrets() {
+        let mut cfg = Config::default();
+        cfg.supabase_session = Some(SupabaseSession {
+            access_token: "secret".into(),
+            provider_token: Some("provider-secret".into()),
+            ..Default::default()
+        });
+        cfg.calendar_providers = vec![CalendarProvider {
+            provider: "google".into(),
+            access_token: "cal-token".into(),
+            refresh_token: "cal-refresh".into(),
+            ..Default::default()
+        }];
+        let safe = sync_safe_config(&cfg);
+        assert!(safe.supabase_session.is_none());
+        assert!(safe.calendar_providers[0].access_token.is_empty());
+        assert!(safe.calendar_providers[0].refresh_token.is_empty());
+    }
+
+    #[test]
+    fn set_onboarding_state_completed_and_clamped() {
+        let done = set_onboarding_state(Config::default(), "essentials", 9, true);
+        assert!(done.onboarding.completed);
+        assert_eq!(done.onboarding.current_step, ONBOARDING_STEP_COMPLETE);
+        assert_eq!(done.onboarding.step_index, 4);
+        assert!(done.onboarding.updated_at.is_some());
+
+        let mid = set_onboarding_state(Config::default(), "backup", 2, false);
+        assert!(!mid.onboarding.completed);
+        assert_eq!(mid.onboarding.current_step, ONBOARDING_STEP_BACKUP);
+        assert_eq!(mid.onboarding.step_index, 2);
+
+        let unknown = set_onboarding_state(Config::default(), "bogus", -3, false);
+        assert_eq!(unknown.onboarding.current_step, ONBOARDING_STEP_WELCOME);
+        assert_eq!(unknown.onboarding.step_index, 0);
+    }
+
+    #[test]
+    fn merge_onboarding_prefers_completion_and_recency() {
+        let local = OnboardingState {
+            completed: false,
+            current_step: ONBOARDING_STEP_ACCOUNT.into(),
+            step_index: 1,
+            updated_at: Some("2026-01-01T00:00:00Z".into()),
+        };
+        let remote_done = OnboardingState {
+            completed: true,
+            current_step: ONBOARDING_STEP_COMPLETE.into(),
+            step_index: 4,
+            updated_at: Some("2025-01-01T00:00:00Z".into()),
+        };
+        // Completion wins even though it's older.
+        assert!(merge_onboarding(&local, &remote_done).completed);
+
+        let remote_newer = OnboardingState {
+            completed: false,
+            current_step: ONBOARDING_STEP_BACKUP.into(),
+            step_index: 2,
+            updated_at: Some("2026-06-01T00:00:00Z".into()),
+        };
+        assert_eq!(
+            merge_onboarding(&local, &remote_newer).current_step,
+            ONBOARDING_STEP_BACKUP
+        );
+
+        let remote_older = OnboardingState {
+            updated_at: Some("2020-01-01T00:00:00Z".into()),
+            ..remote_newer.clone()
+        };
+        // Local is newer, so local wins.
+        assert_eq!(
+            merge_onboarding(&local, &remote_older).current_step,
+            ONBOARDING_STEP_ACCOUNT
+        );
+    }
+
+    #[test]
+    fn sanitize_onboarding_drops_bad_timestamp_and_clamps() {
+        let state = OnboardingState {
+            completed: false,
+            current_step: "essentials".into(),
+            step_index: 200,
+            updated_at: Some("not-a-date".into()),
+        };
+        let cleaned = sanitize_onboarding_state(state);
+        assert_eq!(cleaned.step_index, 4);
+        assert!(cleaned.updated_at.is_none());
+        assert_eq!(cleaned.current_step, ONBOARDING_STEP_ESSENTIALS);
+    }
+
+    #[test]
+    fn sanitize_keeps_session_tokens_but_cleans_provider() {
+        let mut cfg = Config::default();
+        let long_token = "a.b-c_".repeat(100);
+        cfg.supabase_session = Some(SupabaseSession {
+            access_token: long_token.clone(),
+            provider: "  google  ".into(),
+            provider_token: Some(long_token.clone()),
+            ..Default::default()
+        });
+        let cfg = sanitize(cfg);
+        let session = cfg.supabase_session.unwrap();
+        assert_eq!(session.access_token, long_token, "tokens must not be truncated");
+        assert_eq!(session.provider, "google");
+    }
 }

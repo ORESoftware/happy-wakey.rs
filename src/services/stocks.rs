@@ -1,8 +1,17 @@
 use crate::config;
-use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
+use serde::{Deserialize, Deserializer, Serialize};
 use url::Url;
+
+/// Treat both a missing field and an explicit JSON `null` as the type default.
+/// Finnhub returns `"d": null` / `"dp": null` for symbols it can't price, which
+/// would otherwise abort deserialization of the entire quote.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StockData {
@@ -16,15 +25,27 @@ pub struct StockData {
     pub name: String,
 }
 
-#[derive(Debug, Deserialize)]
+// Finnhub's `/quote` endpoint returns: c, d, dp, h, l, o, pc, t.
+// It does NOT return a volume (`v`) field, and `d`/`dp` come back as `null`
+// for symbols Finnhub can't price (many ETFs/crypto on the free tier). Every
+// field must therefore be optional/defaulted, or deserialization fails and the
+// whole watchlist silently shows nothing.
+#[derive(Debug, Deserialize, Default)]
 #[allow(dead_code)]
 struct FinnhubQuote {
+    #[serde(default, deserialize_with = "null_as_default")]
     c: f64,
+    #[serde(default, deserialize_with = "null_as_default")]
     d: f64,
+    #[serde(default, deserialize_with = "null_as_default")]
     dp: f64,
+    #[serde(default, deserialize_with = "null_as_default")]
     h: f64,
+    #[serde(default, deserialize_with = "null_as_default")]
     l: f64,
+    #[serde(default, deserialize_with = "null_as_default")]
     v: u64,
+    #[serde(default)]
     o: Option<f64>,
 }
 
@@ -38,10 +59,7 @@ pub fn fetch_stock(symbol: &str) -> Result<StockData, String> {
     let api_key = std::env::var("FINNHUB_API_KEY")
         .map_err(|_| "FINNHUB_API_KEY is not configured".to_string())?;
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to build stock client: {e}"))?;
+    let client = crate::http::shared_client();
 
     let mut profile_url = Url::parse("https://finnhub.io/api/v1/stock/profile2")
         .map_err(|e| format!("Invalid Finnhub profile URL: {e}"))?;
@@ -85,4 +103,35 @@ pub fn fetch_stock(symbol: &str) -> Result<StockData, String> {
         volume: quote.v,
         name: profile.name,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quote_parses_without_volume_field() {
+        // Realistic Finnhub /quote payload: there is NO `v` field.
+        let json = r#"{"c":150.25,"d":1.5,"dp":1.01,"h":151.0,"l":148.0,"o":149.0,"pc":148.75,"t":1700000000}"#;
+        let quote: FinnhubQuote = serde_json::from_str(json).expect("quote should parse");
+        assert_eq!(quote.c, 150.25);
+        assert_eq!(quote.d, 1.5);
+        assert_eq!(quote.v, 0); // defaulted, since the API never sends it
+    }
+
+    #[test]
+    fn quote_parses_with_null_change_fields() {
+        // Symbols Finnhub can't price return null change values.
+        let json = r#"{"c":0,"d":null,"dp":null,"h":0,"l":0,"o":0,"pc":0,"t":0}"#;
+        let quote: FinnhubQuote = serde_json::from_str(json).expect("null fields should parse");
+        assert_eq!(quote.c, 0.0);
+        assert_eq!(quote.d, 0.0);
+        assert_eq!(quote.dp, 0.0);
+    }
+
+    #[test]
+    fn quote_parses_empty_object() {
+        let quote: FinnhubQuote = serde_json::from_str("{}").expect("empty object should parse");
+        assert_eq!(quote.c, 0.0);
+    }
 }

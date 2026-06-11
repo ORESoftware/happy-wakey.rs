@@ -1,4 +1,8 @@
--- Run this in your Supabase SQL editor to set up the user_config table
+-- Declarative Supabase schema for Happy Wakey.
+-- Re-run this file whenever the desired schema changes; it is idempotent and
+-- does not rely on a migrations table.
+
+create schema if not exists private;
 
 -- Table: user_config
 -- Stores app configuration per user as JSONB
@@ -8,26 +12,35 @@ create table if not exists public.user_config (
   updated_at timestamptz not null default now()
 );
 
+alter table public.user_config
+  add column if not exists config jsonb not null default '{}'::jsonb,
+  add column if not exists updated_at timestamptz not null default now();
+
 -- Enable Row Level Security
 alter table public.user_config enable row level security;
+alter table public.user_config force row level security;
 
 -- Policies: users can only read/write their own config
 drop policy if exists "Users can read own config" on public.user_config;
 create policy "Users can read own config"
   on public.user_config for select
-  using (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) is not null and (select auth.uid()) = user_id);
 
 drop policy if exists "Users can insert own config" on public.user_config;
 create policy "Users can insert own config"
   on public.user_config for insert
-  with check (auth.uid() = user_id);
+  to authenticated
+  with check ((select auth.uid()) is not null and (select auth.uid()) = user_id);
 
 drop policy if exists "Users can update own config" on public.user_config;
 create policy "Users can update own config"
   on public.user_config for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) is not null and (select auth.uid()) = user_id)
+  with check ((select auth.uid()) is not null and (select auth.uid()) = user_id);
 
+revoke all on public.user_config from anon;
 grant select, insert, update on public.user_config to authenticated;
 
 -- Table: user_onboarding_state
@@ -42,69 +55,75 @@ create table if not exists public.user_onboarding_state (
   updated_at timestamptz not null default now()
 );
 
+alter table public.user_onboarding_state
+  add column if not exists completed boolean not null default false,
+  add column if not exists current_step text not null default 'welcome',
+  add column if not exists step_index smallint not null default 0,
+  add column if not exists updated_at timestamptz not null default now();
+
+update public.user_onboarding_state
+set
+  current_step = case
+    when completed then 'complete'
+    when current_step in ('welcome', 'account', 'backup', 'essentials', 'ready') then current_step
+    else 'welcome'
+  end,
+  step_index = least(greatest(step_index, 0), 4);
+
+alter table public.user_onboarding_state
+  drop constraint if exists user_onboarding_state_current_step_check,
+  add constraint user_onboarding_state_current_step_check
+    check (current_step in ('welcome', 'account', 'backup', 'essentials', 'ready', 'complete')),
+  drop constraint if exists user_onboarding_state_step_index_check,
+  add constraint user_onboarding_state_step_index_check
+    check (step_index between 0 and 4);
+
 alter table public.user_onboarding_state enable row level security;
+alter table public.user_onboarding_state force row level security;
 
 drop policy if exists "Users can read own onboarding state" on public.user_onboarding_state;
 create policy "Users can read own onboarding state"
   on public.user_onboarding_state for select
-  using (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) is not null and (select auth.uid()) = user_id);
 
 drop policy if exists "Users can insert own onboarding state" on public.user_onboarding_state;
 create policy "Users can insert own onboarding state"
   on public.user_onboarding_state for insert
-  with check (auth.uid() = user_id);
+  to authenticated
+  with check ((select auth.uid()) is not null and (select auth.uid()) = user_id);
 
 drop policy if exists "Users can update own onboarding state" on public.user_onboarding_state;
 create policy "Users can update own onboarding state"
   on public.user_onboarding_state for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
+  to authenticated
+  using ((select auth.uid()) is not null and (select auth.uid()) = user_id)
+  with check ((select auth.uid()) is not null and (select auth.uid()) = user_id);
 
+revoke all on public.user_onboarding_state from anon;
 grant select, insert, update on public.user_onboarding_state to authenticated;
 
--- Function to upsert config (insert or update)
-create or replace function public.upsert_user_config(p_config jsonb)
-returns void
+-- Keep updated_at server-owned for REST upserts.
+create or replace function private.set_updated_at()
+returns trigger
 language plpgsql
-security definer
+set search_path = ''
 as $$
 begin
-  insert into public.user_config (user_id, config, updated_at)
-  values (auth.uid(), p_config, now())
-  on conflict (user_id)
-  do update set config = p_config, updated_at = now();
+  new.updated_at = now();
+  return new;
 end;
 $$;
 
-create or replace function public.upsert_user_onboarding_state(
-  p_completed boolean,
-  p_current_step text,
-  p_step_index smallint
-)
-returns void
-language plpgsql
-security definer
-as $$
-begin
-  insert into public.user_onboarding_state (
-    user_id,
-    completed,
-    current_step,
-    step_index,
-    updated_at
-  )
-  values (
-    auth.uid(),
-    p_completed,
-    case when p_completed then 'complete' else p_current_step end,
-    p_step_index,
-    now()
-  )
-  on conflict (user_id)
-  do update set
-    completed = p_completed,
-    current_step = case when p_completed then 'complete' else p_current_step end,
-    step_index = p_step_index,
-    updated_at = now();
-end;
-$$;
+drop trigger if exists set_user_config_updated_at on public.user_config;
+create trigger set_user_config_updated_at
+  before insert or update on public.user_config
+  for each row execute function private.set_updated_at();
+
+drop trigger if exists set_user_onboarding_state_updated_at on public.user_onboarding_state;
+create trigger set_user_onboarding_state_updated_at
+  before insert or update on public.user_onboarding_state
+  for each row execute function private.set_updated_at();
+
+drop function if exists public.upsert_user_config(jsonb);
+drop function if exists public.upsert_user_onboarding_state(boolean, text, smallint);

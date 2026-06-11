@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.happywakey
 
 Rectangle {
     color: "transparent"
@@ -21,7 +22,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
             Button {
                 text: "Refresh"
-                onClicked: backend.refresh_weather()
+                onClicked: Backend.refresh_weather()
                 flat: true
             }
         }
@@ -65,7 +66,7 @@ Rectangle {
                                 font.pixelSize: 13
                                 color: theme.muted
                             }
-                            Item { height: 4 }
+                            Item { Layout.preferredHeight: 4 }
                             Text {
                                 text: model.temp + "°F"
                                 font.pixelSize: 36
@@ -89,7 +90,7 @@ Rectangle {
                                 text: "☁ Doppler Radar"
                                 font.pixelSize: 11
                                 onClicked: Qt.openUrlExternally(
-                                    "https://www.windy.com/?" + model.lat + "," + model.lon
+                                    "https://www.windy.com/?" + model.lat + "," + model.lon + ",8"
                                 )
                             }
                         }
@@ -102,14 +103,14 @@ Rectangle {
     ListModel { id: weatherModel }
 
     onVisibleChanged: {
-        if (visible) backend.refresh_weather()
+        if (visible) Backend.refresh_weather()
     }
 
     Connections {
-        target: backend
-        function onWeather_changed() {
+        target: Backend
+        function onWeather_jsonChanged() {
             try {
-                var arr = JSON.parse(backend.weather_json)
+                var arr = JSON.parse(Backend.weather_json)
                 weatherModel.clear()
                 for (var i = 0; i < arr.length; i++) {
                     var w = arr[i]

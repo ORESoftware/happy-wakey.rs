@@ -1,7 +1,5 @@
 use chrono::Datelike;
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,15 +14,8 @@ pub struct CalendarEvent {
     pub location: Option<String>,
 }
 
-fn client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to build calendar client: {e}"))
-}
-
 pub fn fetch_google_events(access_token: &str) -> Result<Vec<CalendarEvent>, String> {
-    let client = client()?;
+    let client = crate::http::shared_client();
     let now = chrono::Utc::now();
     let week_start = now - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
     let week_end = week_start + chrono::Duration::days(7);
@@ -104,7 +95,7 @@ pub fn fetch_google_events(access_token: &str) -> Result<Vec<CalendarEvent>, Str
 }
 
 pub fn fetch_outlook_events(access_token: &str) -> Result<Vec<CalendarEvent>, String> {
-    let client = client()?;
+    let client = crate::http::shared_client();
     let now = chrono::Utc::now();
     let week_start = now - chrono::Duration::days(now.weekday().num_days_from_monday() as i64);
     let week_end = week_start + chrono::Duration::days(7);

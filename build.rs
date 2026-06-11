@@ -1,3 +1,32 @@
+use cxx_qt_build::{CxxQtBuilder, QmlModule};
+
 fn main() {
-    println!("cargo:rerun-if-changed=src/main.rs");
+    CxxQtBuilder::new()
+        .qt_module("Quick")
+        .qt_module("WebEngineQuick")
+        // Make the WebEngine init shim header visible to the generated bridge code.
+        .cc_builder(|cc| {
+            cc.include("cpp");
+        })
+        .qml_module(QmlModule {
+            uri: "com.happywakey",
+            version_major: 1,
+            version_minor: 0,
+            // The bridge (Backend QObject) lives in main.rs.
+            rust_files: &["src/main.rs"],
+            qml_files: &[
+                "qml/MainWindow.qml",
+                "qml/Theme.qml",
+                "qml/HomePanel.qml",
+                "qml/CalendarPanel.qml",
+                "qml/WeatherPanel.qml",
+                "qml/StocksPanel.qml",
+                "qml/NewsPanel.qml",
+                "qml/BrowserPanel.qml",
+                "qml/SettingsPanel.qml",
+                "qml/OnboardingPanel.qml",
+            ],
+            ..Default::default()
+        })
+        .build();
 }

@@ -1,6 +1,4 @@
-use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,11 +61,7 @@ pub fn fetch_weather(lat: f64, lon: f64, location_name: &str) -> Result<WeatherD
         .append_pair("units", "imperial")
         .append_pair("appid", &api_key);
 
-    let client = Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("Failed to build weather client: {e}"))?;
-    let resp: OpenWeatherResponse = client
+    let resp: OpenWeatherResponse = crate::http::shared_client()
         .get(url)
         .send()
         .map_err(|e| format!("Weather request failed: {}", e))?
