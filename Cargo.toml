@@ -20,6 +20,7 @@ sha2 = "0.10"
 webbrowser = "1"
 dirs = "6"
 dotenvy = "0.15"
+notify-rust = "4.18"
 
 [build-dependencies]
 cxx-qt-build = { version = "0.7", features = ["link_qt_object_files"] }

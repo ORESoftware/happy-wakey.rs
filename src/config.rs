@@ -23,9 +23,10 @@ pub struct Config {
     pub git_repo_path: Option<String>,
     pub supabase_sync_enabled: bool,
     pub onboarding: OnboardingState,
+    pub reminder_settings: ReminderSettings,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SupabaseSession {
     pub access_token: String,
@@ -38,7 +39,7 @@ pub struct SupabaseSession {
     pub provider_refresh_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CalendarProvider {
     pub provider: String,
@@ -71,29 +72,18 @@ pub struct OnboardingState {
     pub updated_at: Option<String>,
 }
 
-impl Default for SupabaseSession {
-    fn default() -> Self {
-        Self {
-            access_token: String::new(),
-            refresh_token: String::new(),
-            expires_at: 0,
-            user_id: String::new(),
-            email: None,
-            provider: String::new(),
-            provider_token: None,
-            provider_refresh_token: None,
-        }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReminderSettings {
+    pub enabled: bool,
+    pub offsets_minutes: Vec<u16>,
 }
 
-impl Default for CalendarProvider {
+impl Default for ReminderSettings {
     fn default() -> Self {
         Self {
-            provider: String::new(),
-            email: String::new(),
-            access_token: String::new(),
-            refresh_token: String::new(),
-            expires_at: 0,
+            enabled: true,
+            offsets_minutes: vec![30, 10],
         }
     }
 }
@@ -121,16 +111,33 @@ impl Default for Config {
             // "BTC-USD"-style crypto pseudo-tickers (those need e.g. BINANCE:BTCUSDT),
             // so the default watchlist sticks to symbols that actually return data.
             stock_symbols: vec![
-                "AAPL".into(), "GOOGL".into(), "MSFT".into(), "AMZN".into(), "NVDA".into(),
-                "META".into(), "TSLA".into(), "SPY".into(), "QQQ".into(), "GLD".into(),
-                "AMD".into(), "WMT".into(), "JPM".into(), "V".into(), "KO".into(),
-                "DIS".into(), "NFLX".into(), "BA".into(), "XOM".into(), "PG".into(),
+                "AAPL".into(),
+                "GOOGL".into(),
+                "MSFT".into(),
+                "AMZN".into(),
+                "NVDA".into(),
+                "META".into(),
+                "TSLA".into(),
+                "SPY".into(),
+                "QQQ".into(),
+                "GLD".into(),
+                "AMD".into(),
+                "WMT".into(),
+                "JPM".into(),
+                "V".into(),
+                "KO".into(),
+                "DIS".into(),
+                "NFLX".into(),
+                "BA".into(),
+                "XOM".into(),
+                "PG".into(),
             ],
             news_keywords: vec!["technology".into(), "AI".into(), "markets".into()],
             browser_bookmarks: Vec::new(),
             git_repo_path: None,
             supabase_sync_enabled: true,
             onboarding: OnboardingState::default(),
+            reminder_settings: ReminderSettings::default(),
         }
     }
 }
@@ -184,7 +191,8 @@ pub fn save(config: &Config) -> Result<(), String> {
     }
 
     let mut file = options.open(&tmp_path).map_err(|e| e.to_string())?;
-    file.write_all(content.as_bytes()).map_err(|e| e.to_string())?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| e.to_string())?;
     file.write_all(b"\n").map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
     drop(file);
@@ -243,16 +251,14 @@ pub fn sanitize(mut config: Config) -> Config {
         .take(50)
         .collect();
 
-    config.git_repo_path = config
-        .git_repo_path
-        .and_then(|path| {
-            let path = clean_text(&path, 512);
-            if path.is_empty() {
-                None
-            } else {
-                Some(path)
-            }
-        });
+    config.git_repo_path = config.git_repo_path.and_then(|path| {
+        let path = clean_text(&path, 512);
+        if path.is_empty() {
+            None
+        } else {
+            Some(path)
+        }
+    });
 
     config.calendar_providers = config
         .calendar_providers
@@ -270,6 +276,7 @@ pub fn sanitize(mut config: Config) -> Config {
     }
 
     config.onboarding = sanitize_onboarding_state(config.onboarding);
+    config.reminder_settings = sanitize_reminder_settings(config.reminder_settings);
     config
 }
 
@@ -292,6 +299,7 @@ pub fn merge_editable_config(mut current: Config, incoming: Config) -> Config {
     current.git_repo_path = incoming.git_repo_path;
     current.supabase_sync_enabled = incoming.supabase_sync_enabled;
     current.onboarding = incoming.onboarding;
+    current.reminder_settings = incoming.reminder_settings;
     sanitize(current)
 }
 
@@ -383,6 +391,18 @@ pub fn sanitize_onboarding_state(mut state: OnboardingState) -> OnboardingState 
     state
 }
 
+fn sanitize_reminder_settings(mut settings: ReminderSettings) -> ReminderSettings {
+    settings
+        .offsets_minutes
+        .retain(|minutes| (1..=24 * 60).contains(minutes));
+    settings
+        .offsets_minutes
+        .sort_unstable_by(|left, right| right.cmp(left));
+    settings.offsets_minutes.dedup();
+    settings.offsets_minutes.truncate(5);
+    settings
+}
+
 fn normalize_onboarding_step(step: &str, completed: bool) -> String {
     if completed {
         return ONBOARDING_STEP_COMPLETE.into();
@@ -431,6 +451,7 @@ fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -459,7 +480,11 @@ mod tests {
         cfg.stock_symbols = (0..50).map(|i| format!("SYM{i}")).collect();
         cfg.news_keywords = (0..50).map(|i| format!("kw{i}")).collect();
         cfg.weather_locations = (0..20)
-            .map(|i| WeatherLocation { name: format!("L{i}"), lat: 1.0, lon: 2.0 })
+            .map(|i| WeatherLocation {
+                name: format!("L{i}"),
+                lat: 1.0,
+                lon: 2.0,
+            })
             .collect();
         let cfg = sanitize(cfg);
         assert_eq!(cfg.stock_symbols.len(), 20);
@@ -642,6 +667,15 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_reminder_offsets_sorts_deduplicates_and_clamps() {
+        let cleaned = sanitize_reminder_settings(ReminderSettings {
+            enabled: true,
+            offsets_minutes: vec![10, 30, 10, 0, 1441, 5, 120, 60, 15],
+        });
+        assert_eq!(cleaned.offsets_minutes, vec![120, 60, 30, 15, 10]);
+    }
+
+    #[test]
     fn sanitize_keeps_session_tokens_but_cleans_provider() {
         let mut cfg = Config::default();
         let long_token = "a.b-c_".repeat(100);
@@ -653,7 +687,10 @@ mod tests {
         });
         let cfg = sanitize(cfg);
         let session = cfg.supabase_session.unwrap();
-        assert_eq!(session.access_token, long_token, "tokens must not be truncated");
+        assert_eq!(
+            session.access_token, long_token,
+            "tokens must not be truncated"
+        );
         assert_eq!(session.provider, "google");
     }
 }

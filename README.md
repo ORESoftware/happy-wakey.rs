@@ -1,6 +1,6 @@
 # Happy Wakey
 
-A cross-platform Rust desktop app — calendar, weather, stocks, news, and an in-app browser, all in a native Qt/QML UI. Auth and config sync powered by Supabase.
+A cross-platform Rust desktop app for calendar, weather, markets, news, and frequently used pages. The interface is native Qt/QML, the application core is Rust, and Supabase provides optional auth and config sync.
 
 ## Prerequisites
 
@@ -27,9 +27,9 @@ cargo run
 Priority (highest to lowest):
 
 1. **CLI flags** — `cargo run -- --supabase-anon-key=xxx`
-2. **`.env` file** — key=value pairs in project root
-3. **System environment variables**
-4. **Built-in defaults** — Supabase URL defaults to the project URL; all API keys default to empty
+2. **System environment variables**
+3. **`.env` file** — key=value pairs in project root
+4. **Built-in defaults** — Supabase and Open-Meteo URLs have defaults; API keys default to empty
 
 ### CLI flags
 
@@ -38,12 +38,24 @@ Priority (highest to lowest):
 | `--supabase-url` | `SUPABASE_URL` | `-s` | Supabase project URL |
 | `--supabase-anon-key` | `SUPABASE_ANON_KEY` | | Supabase anon/public key |
 | `--openweather-api-key` | `OPENWEATHER_API_KEY` | `-w` | OpenWeatherMap API key |
+| `--open-meteo-base-url` | `OPEN_METEO_BASE_URL` | | Open-Meteo endpoint |
+| `--open-meteo-api-key` | `OPEN_METEO_API_KEY` | | Open-Meteo customer API key |
 | `--finnhub-api-key` | `FINNHUB_API_KEY` | `-f` | Finnhub API key |
 | `--newsapi-key` | `NEWSAPI_KEY` | `-n` | NewsAPI key |
 | `--git-repo` | `GIT_REPO_PATH` | | Path to git config backup |
 | `--config-dir` | `CONFIG_DIR` | | Override config directory |
 
 Flag definitions live in `.cli-flags.toml` (compatible with `flags-2-env` tool).
+
+## External services
+
+- **Weather:** Open-Meteo supplies current conditions and a five-day forecast without a key for eligible non-commercial use. OpenWeather is used as a fallback when `OPENWEATHER_API_KEY` is set. Commercial distributions should use an Open-Meteo paid customer endpoint and key.
+- **Markets:** Finnhub supplies quotes and company profiles. Set `FINNHUB_API_KEY`.
+- **News:** NewsAPI supplies up to five keyword-matched headlines. Set `NEWSAPI_KEY`.
+- **Calendar:** Google Calendar and Microsoft Graph use provider OAuth tokens obtained through Supabase login.
+- **Reminders:** a local Rust scheduler delivers configurable desktop alerts and persists a deduplication ledger; macOS builds require a stable registered `HAPPY_WAKEY_BUNDLE_ID`.
+
+All GET integrations share a pooled HTTP client with connection and request timeouts, bounded JSON responses, limited redirects, and retries for transient failures. API keys are sent in headers where the provider supports it.
 
 ## Supabase OAuth Setup
 
@@ -56,11 +68,12 @@ src/
   main.rs              # Entry point, Backend QObject, Qt event loop
   config.rs            # Local config (JSON in ~/.config/happy-wakey/)
   env_config.rs        # .env + CLI flag parsing (flags-2-env style)
+  reminders.rs         # Native reminder scheduler + delivery ledger
   supabase.rs          # PKCE OAuth login flow
   supabase_config.rs   # Config sync to Supabase REST API
   services/
     calendar.rs        # Google Calendar + Outlook via OAuth tokens
-    weather.rs         # OpenWeatherMap
+    weather.rs         # Open-Meteo + OpenWeather fallback
     stocks.rs          # Finnhub
     news.rs            # NewsAPI
 qml/
@@ -71,6 +84,15 @@ qml/
   NewsPanel.qml        # News feed
   BrowserPanel.qml     # Tabbed QWebEngineView
   SettingsPanel.qml    # Auth buttons, bookmarks, config
+```
+
+## Tests
+
+```bash
+cargo test
+
+# Explicit live smoke test against Open-Meteo
+cargo test open_meteo_live_smoke -- --ignored
 ```
 
 ## License

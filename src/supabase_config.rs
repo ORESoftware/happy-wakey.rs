@@ -3,11 +3,17 @@ use reqwest::blocking::Client;
 use url::Url;
 
 fn supabase_url() -> String {
-    std::env::var("SUPABASE_URL").unwrap_or_else(|_| "https://vgzyyfhnendriyrhakkp.supabase.co".into())
+    std::env::var("SUPABASE_URL")
+        .unwrap_or_else(|_| "https://vgzyyfhnendriyrhakkp.supabase.co".into())
 }
 
-fn anon_key() -> String {
-    std::env::var("SUPABASE_ANON_KEY").unwrap_or_default()
+fn require_anon_key() -> Result<String, String> {
+    let key = std::env::var("SUPABASE_ANON_KEY").unwrap_or_default();
+    if key.trim().is_empty() {
+        Err("SUPABASE_ANON_KEY is not configured".into())
+    } else {
+        Ok(key)
+    }
 }
 
 fn authed_user_id(client: &Client, access_token: &str) -> Result<String, String> {
@@ -16,16 +22,13 @@ fn authed_user_id(client: &Client, access_token: &str) -> Result<String, String>
         id: String,
     }
 
-    let user: UserResp = client
-        .get(format!("{}/auth/v1/user", supabase_url()))
-        .header("apikey", anon_key())
-        .header("Authorization", format!("Bearer {}", access_token))
-        .send()
-        .map_err(|e| format!("Auth request failed: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Auth request rejected: {e}"))?
-        .json()
-        .map_err(|e| format!("Auth parse failed: {e}"))?;
+    let user: UserResp = crate::http::get_json(
+        "Supabase user",
+        client
+            .get(format!("{}/auth/v1/user", supabase_url()))
+            .header("apikey", require_anon_key()?)
+            .bearer_auth(access_token),
+    )?;
 
     Ok(user.id)
 }
@@ -40,6 +43,7 @@ fn rest_url(path: &str) -> Result<Url, String> {
 pub fn fetch_config(access_token: &str) -> Result<Config, String> {
     let client = crate::http::shared_client();
     let user_id = authed_user_id(client, access_token)?;
+    let anon_key = require_anon_key()?;
 
     // Fetch config from the user_config table
     let mut url = rest_url("user_config")?;
@@ -47,21 +51,18 @@ pub fn fetch_config(access_token: &str) -> Result<Config, String> {
         .append_pair("user_id", &format!("eq.{user_id}"))
         .append_pair("select", "config");
 
-    let resp = client
-        .get(url)
-        .header("apikey", anon_key())
-        .header("Authorization", format!("Bearer {}", access_token))
-        .send()
-        .map_err(|e| format!("Config fetch failed: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Config fetch rejected: {e}"))?;
-
     #[derive(serde::Deserialize)]
     struct ConfigRow {
         config: serde_json::Value,
     }
 
-    let rows: Vec<ConfigRow> = resp.json().map_err(|e| format!("Parse failed: {e}"))?;
+    let rows: Vec<ConfigRow> = crate::http::get_json(
+        "Supabase config",
+        client
+            .get(url)
+            .header("apikey", anon_key)
+            .bearer_auth(access_token),
+    )?;
 
     if let Some(row) = rows.first() {
         serde_json::from_value(row.config.clone())
@@ -76,7 +77,9 @@ pub fn fetch_config(access_token: &str) -> Result<Config, String> {
 pub fn save_config(access_token: &str, config: &Config) -> Result<(), String> {
     let client = crate::http::shared_client();
     let user_id = authed_user_id(client, access_token)?;
-    let config_json = serde_json::to_value(config::sync_safe_config(config)).map_err(|e| e.to_string())?;
+    let anon_key = require_anon_key()?;
+    let config_json =
+        serde_json::to_value(config::sync_safe_config(config)).map_err(|e| e.to_string())?;
 
     let body = serde_json::json!({
         "user_id": user_id,
@@ -89,9 +92,9 @@ pub fn save_config(access_token: &str, config: &Config) -> Result<(), String> {
 
     client
         .post(url)
-        .header("apikey", anon_key())
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Prefer", "resolution=merge-duplicates")
+        .header("apikey", anon_key)
+        .bearer_auth(access_token)
+        .header("Prefer", "resolution=merge-duplicates,return=minimal")
         .json(&body)
         .send()
         .map_err(|e| format!("Config save failed: {e}"))?
@@ -104,6 +107,7 @@ pub fn save_config(access_token: &str, config: &Config) -> Result<(), String> {
 pub fn fetch_onboarding_state(access_token: &str) -> Result<Option<OnboardingState>, String> {
     let client = crate::http::shared_client();
     let user_id = authed_user_id(client, access_token)?;
+    let anon_key = require_anon_key()?;
 
     let mut url = rest_url("user_onboarding_state")?;
     url.query_pairs_mut()
@@ -111,28 +115,24 @@ pub fn fetch_onboarding_state(access_token: &str) -> Result<Option<OnboardingSta
         .append_pair("select", "completed,current_step,step_index,updated_at")
         .append_pair("limit", "1");
 
-    let resp = client
-        .get(url)
-        .header("apikey", anon_key())
-        .header("Authorization", format!("Bearer {}", access_token))
-        .send()
-        .map_err(|e| format!("Onboarding fetch failed: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Onboarding fetch rejected: {e}"))?;
+    let rows: Vec<OnboardingState> = crate::http::get_json(
+        "Supabase onboarding",
+        client
+            .get(url)
+            .header("apikey", anon_key)
+            .bearer_auth(access_token),
+    )?;
 
-    let rows: Vec<OnboardingState> = resp
-        .json()
-        .map_err(|e| format!("Onboarding parse failed: {e}"))?;
-
-    Ok(rows.into_iter().next().map(config::sanitize_onboarding_state))
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(config::sanitize_onboarding_state))
 }
 
-pub fn save_onboarding_state(
-    access_token: &str,
-    state: &OnboardingState,
-) -> Result<(), String> {
+pub fn save_onboarding_state(access_token: &str, state: &OnboardingState) -> Result<(), String> {
     let client = crate::http::shared_client();
     let user_id = authed_user_id(client, access_token)?;
+    let anon_key = require_anon_key()?;
     let state = config::sanitize_onboarding_state(state.clone());
 
     let body = serde_json::json!({
@@ -148,9 +148,9 @@ pub fn save_onboarding_state(
 
     client
         .post(url)
-        .header("apikey", anon_key())
-        .header("Authorization", format!("Bearer {}", access_token))
-        .header("Prefer", "resolution=merge-duplicates")
+        .header("apikey", anon_key)
+        .bearer_auth(access_token)
+        .header("Prefer", "resolution=merge-duplicates,return=minimal")
         .json(&body)
         .send()
         .map_err(|e| format!("Onboarding save failed: {e}"))?

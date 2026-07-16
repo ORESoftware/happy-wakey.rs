@@ -20,10 +20,16 @@ Rectangle {
                 color: theme.text
             }
             Item { Layout.fillWidth: true }
+            BusyIndicator {
+                running: Backend.news_loading
+                visible: running
+                Layout.preferredWidth: 24
+                Layout.preferredHeight: 24
+            }
             Button {
-                text: "Refresh"
+                text: Backend.news_loading ? "Refreshing..." : "Refresh"
+                enabled: !Backend.news_loading
                 onClicked: Backend.refresh_news()
-                flat: true
             }
         }
 
@@ -118,7 +124,7 @@ Rectangle {
     ListModel { id: newsModel }
 
     onVisibleChanged: {
-        if (visible) Backend.refresh_news()
+        if (visible && newsModel.count === 0) Backend.refresh_news()
     }
 
     Connections {

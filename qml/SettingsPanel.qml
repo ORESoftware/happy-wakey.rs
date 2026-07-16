@@ -20,12 +20,14 @@ Rectangle {
         }
 
         ScrollView {
+            id: settingsScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
             ColumnLayout {
-                width: parent ? parent.width : 0
+                width: settingsScroll.availableWidth
                 spacing: 20
 
                 // ---- Account Section ----
@@ -67,6 +69,44 @@ Rectangle {
                                 visible: Backend.logged_in
                                 onClicked: Backend.logout()
                             }
+                        }
+                    }
+                }
+
+                SectionBox {
+                    title: "Calendar Reminders"
+                    Layout.fillWidth: true
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 12
+
+                        Switch {
+                            id: remindersEnabled
+                            text: "Desktop reminders"
+                            checked: true
+                        }
+                        CheckBox {
+                            id: reminder30
+                            text: "30 min"
+                            checked: true
+                            enabled: remindersEnabled.checked
+                        }
+                        CheckBox {
+                            id: reminder10
+                            text: "10 min"
+                            checked: true
+                            enabled: remindersEnabled.checked
+                        }
+                        CheckBox {
+                            id: reminder5
+                            text: "5 min"
+                            enabled: remindersEnabled.checked
+                        }
+                        Item { Layout.fillWidth: true }
+                        Button {
+                            text: "Test reminder"
+                            onClicked: Backend.test_notification()
                         }
                     }
                 }
@@ -383,6 +423,10 @@ Rectangle {
                                 browser_bookmarks: [],
                                 git_repo_path: "",
                                 supabase_sync_enabled: true,
+                                reminder_settings: {
+                                    enabled: true,
+                                    offsets_minutes: [30, 10]
+                                },
                                 onboarding: {
                                     completed: false,
                                     current_step: "welcome",
@@ -446,6 +490,15 @@ Rectangle {
             // Git repo
             cfg.git_repo_path = gitRepoPath.text || ""
 
+            var reminderOffsets = []
+            if (reminder30.checked) reminderOffsets.push(30)
+            if (reminder10.checked) reminderOffsets.push(10)
+            if (reminder5.checked) reminderOffsets.push(5)
+            cfg.reminder_settings = {
+                enabled: remindersEnabled.checked,
+                offsets_minutes: reminderOffsets
+            }
+
             Backend.save_config(JSON.stringify(cfg))
             Backend.reload_config()
         } catch(e) {
@@ -465,6 +518,16 @@ Rectangle {
 
         try {
             var cfg = JSON.parse(Backend.app_config_json)
+
+            var reminderSettings = cfg.reminder_settings || {
+                enabled: true,
+                offsets_minutes: [30, 10]
+            }
+            var offsets = reminderSettings.offsets_minutes || []
+            remindersEnabled.checked = reminderSettings.enabled !== false
+            reminder30.checked = offsets.indexOf(30) >= 0
+            reminder10.checked = offsets.indexOf(10) >= 0
+            reminder5.checked = offsets.indexOf(5) >= 0
 
             weatherLocModel.clear()
             if (cfg.weather_locations) {

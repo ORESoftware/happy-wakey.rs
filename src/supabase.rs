@@ -199,7 +199,10 @@ impl CallbackError {
     }
 }
 
-fn read_callback_code(stream: &mut TcpStream, expected_state: &str) -> Result<String, CallbackError> {
+fn read_callback_code(
+    stream: &mut TcpStream,
+    expected_state: &str,
+) -> Result<String, CallbackError> {
     let mut buf = [0u8; 8192];
     let n = stream
         .read(&mut buf)
@@ -303,7 +306,10 @@ fn exchange_code_for_session(
 
 #[allow(dead_code)]
 pub fn refresh_session(refresh_token: &str) -> Result<SupabaseSession, String> {
-    let params = [("grant_type", "refresh_token"), ("refresh_token", refresh_token)];
+    let params = [
+        ("grant_type", "refresh_token"),
+        ("refresh_token", refresh_token),
+    ];
 
     let resp: AuthTokenResponse = crate::http::shared_client()
         .post(format!("{}/auth/v1/token", supabase_url()))
@@ -352,7 +358,9 @@ mod tests {
 
     #[test]
     fn provider_scopes_cover_calendar_capable_providers() {
-        assert!(provider_scopes("google").unwrap().contains("calendar.readonly"));
+        assert!(provider_scopes("google")
+            .unwrap()
+            .contains("calendar.readonly"));
         assert!(provider_scopes("azure").unwrap().contains("Calendars.Read"));
         assert!(provider_scopes("apple").is_none());
     }

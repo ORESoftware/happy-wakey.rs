@@ -20,15 +20,15 @@ Rectangle {
                 color: theme.text
             }
             Label {
-                text: Backend.stocks_loading ? "Loading…" : ""
+                text: Backend.stocks_loading ? "Refreshing..." : ""
                 color: theme.muted
                 font.pixelSize: 12
             }
             Item { Layout.fillWidth: true }
             Button {
-                text: "Refresh All"
+                text: Backend.stocks_loading ? "Refreshing..." : "Refresh all"
+                enabled: !Backend.stocks_loading
                 onClicked: Backend.refresh_stocks()
-                flat: true
             }
         }
 

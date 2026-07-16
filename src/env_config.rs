@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-/// Load `.env`, then parse CLI flags against `.cli-flags.toml`.
-/// CLI > .env > system env > defaults from .cli-flags.toml.
+/// Load `.env`, then parse CLI flags against the built-in flag schema.
+/// CLI > system environment > .env > built-in defaults.
 pub fn init() {
-    // 1. Load .env (does not overwrite existing env vars)
-    let _ = dotenvy::from_path_iter(Path::new(".env"));
+    // `from_path_iter` only parses values; it does not install them. `from_path`
+    // loads the file while preserving environment variables already set by the
+    // launcher, which is the precedence desktop packaging expects.
+    let _ = dotenvy::from_path(Path::new(".env"));
 
     // 2. Define flags (same schema as .cli-flags.toml)
     let entries = builtin_flags();
@@ -63,6 +65,18 @@ fn builtin_flags() -> Vec<FlagEntry> {
             default_val: None,
         },
         FlagEntry {
+            env: "OPEN_METEO_BASE_URL".into(),
+            aliases: vec!["open-meteo-base-url".into()],
+            short: None,
+            default_val: Some("https://api.open-meteo.com/v1/forecast".into()),
+        },
+        FlagEntry {
+            env: "OPEN_METEO_API_KEY".into(),
+            aliases: vec!["open-meteo-api-key".into()],
+            short: None,
+            default_val: None,
+        },
+        FlagEntry {
             env: "FINNHUB_API_KEY".into(),
             aliases: vec!["finnhub-api-key".into()],
             short: Some("f".into()),
@@ -102,23 +116,14 @@ fn parse_flags(args: &[String]) -> ParsedFlags {
     while i < args.len() {
         let arg = &args[i];
 
-        // --flag=value
-        if arg.find("--").is_some() {
-            // Only process if it starts with --
-            if arg.starts_with("--") {
-                let rest = &arg[2..];
-                if let Some(eq) = rest.find('=') {
-                    let name = &rest[..eq];
-                    let value = &rest[eq + 1..];
-                    map.insert(name.to_string(), value.to_string());
-                    i += 1;
-                    continue;
-                }
+        if let Some(name) = arg.strip_prefix("--") {
+            // --flag=value
+            if let Some(eq) = name.find('=') {
+                let value = &name[eq + 1..];
+                map.insert(name[..eq].to_string(), value.to_string());
+                i += 1;
+                continue;
             }
-        }
-
-        if arg.starts_with("--") {
-            let name = &arg[2..];
             // --flag value (next arg)
             if i + 1 < args.len() && !args[i + 1].starts_with('-') {
                 map.insert(name.to_string(), args[i + 1].clone());
@@ -183,8 +188,14 @@ mod tests {
             "finnkey",
             "positional-ignored",
         ]));
-        assert_eq!(parsed.get("supabase-anon-key").map(String::as_str), Some("abc123"));
-        assert_eq!(parsed.get("owm-key").map(String::as_str), Some("weatherkey"));
+        assert_eq!(
+            parsed.get("supabase-anon-key").map(String::as_str),
+            Some("abc123")
+        );
+        assert_eq!(
+            parsed.get("owm-key").map(String::as_str),
+            Some("weatherkey")
+        );
         assert_eq!(parsed.get("f").map(String::as_str), Some("finnkey"));
         assert!(!parsed.contains_key("positional-ignored"));
     }
@@ -212,11 +223,17 @@ mod tests {
 
         let mut by_alias = ParsedFlags::new();
         by_alias.insert("owm-key".into(), "from-alias".into());
-        assert_eq!(resolve_flag(&by_alias, &entry).as_deref(), Some("from-alias"));
+        assert_eq!(
+            resolve_flag(&by_alias, &entry).as_deref(),
+            Some("from-alias")
+        );
 
         let mut by_short = ParsedFlags::new();
         by_short.insert("w".into(), "from-short".into());
-        assert_eq!(resolve_flag(&by_short, &entry).as_deref(), Some("from-short"));
+        assert_eq!(
+            resolve_flag(&by_short, &entry).as_deref(),
+            Some("from-short")
+        );
 
         assert_eq!(resolve_flag(&ParsedFlags::new(), &entry), None);
     }

@@ -1,5 +1,5 @@
 [help]
-url = "https://github.com/anomalyco/happy-wakey"
+url = "https://github.com/ORESoftware/happy-wakey.rs"
 
 [flags.supabase_url]
 env = "SUPABASE_URL"
@@ -23,6 +23,20 @@ short = "w"
 type = "string"
 default = ""
 help = "OpenWeatherMap API key"
+
+[flags.open_meteo_base_url]
+env = "OPEN_METEO_BASE_URL"
+aliases = ["open-meteo-base-url"]
+type = "string"
+default = "https://api.open-meteo.com/v1/forecast"
+help = "Open-Meteo forecast endpoint (use the paid customer endpoint for commercial distribution)"
+
+[flags.open_meteo_api_key]
+env = "OPEN_METEO_API_KEY"
+aliases = ["open-meteo-api-key"]
+type = "string"
+default = ""
+help = "Open-Meteo customer API key"
 
 [flags.finnhub_api_key]
 env = "FINNHUB_API_KEY"

@@ -15,6 +15,9 @@ Rectangle {
     property int stockSymbolCount: 0
     property int newsKeywordCount: 0
     property int bookmarkCount: 0
+    property var calendarAgenda: ({ total_events: 0, headline: "Weekly events and reminders" })
+    property bool anyLoading: Backend.calendar_loading || Backend.weather_loading
+        || Backend.stocks_loading || Backend.news_loading
 
     function parseJson(json, fallback) {
         try {
@@ -36,13 +39,13 @@ Rectangle {
 
     function rebuildCalendar() {
         var arr = parseJson(Backend.calendar_json, [])
+        calendarAgenda = parseJson(Backend.calendar_agenda_json, calendarAgenda)
         calendarModel.clear()
         for (var i = 0; i < Math.min(arr.length, 3); i++) {
             var ev = arr[i]
-            var startStr = ev.start || ""
             calendarModel.append({
                 title: ev.title || "Untitled",
-                meta: (startStr.length >= 16 ? startStr.substring(11, 16) : "Anytime") + " · " + (ev.provider || "calendar")
+                meta: (ev.day_label || "Upcoming") + " · " + (ev.time_label || "Anytime")
             })
         }
     }
@@ -54,7 +57,7 @@ Rectangle {
             var w = arr[i]
             weatherModel.append({
                 title: w.location_name || "Unknown",
-                meta: Math.round(w.temperature) + "F · " + (w.condition || "")
+                meta: Math.round(w.temperature) + "° · " + (w.condition || "")
             })
         }
     }
@@ -114,6 +117,7 @@ Rectangle {
         target: Backend
         function onApp_config_jsonChanged() { refreshConfig() }
         function onCalendar_jsonChanged() { rebuildCalendar() }
+        function onCalendar_agenda_jsonChanged() { rebuildCalendar() }
         function onWeather_jsonChanged() { rebuildWeather() }
         function onStocks_jsonChanged() { rebuildStocks() }
         function onNews_jsonChanged() { rebuildNews() }
@@ -152,80 +156,88 @@ Rectangle {
             }
 
             Button {
-                text: "Refresh All"
+                text: root.anyLoading ? "Refreshing..." : "Refresh all"
+                enabled: !root.anyLoading
                 onClicked: refreshAll()
-                flat: true
             }
         }
 
         ScrollView {
+            id: homeScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
+            ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
             GridLayout {
                 id: homeGrid
-                width: parent ? parent.width : 0
+                width: homeScroll.availableWidth
                 columns: width > 980 ? 3 : 2
+                property real cardWidth: Math.max(300,
+                    (width - columnSpacing * (columns - 1)) / columns)
                 columnSpacing: 12
                 rowSpacing: 12
 
                 PreviewCard {
                     theme: root.theme
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
+                    Layout.preferredWidth: homeGrid.cardWidth
+                    Layout.preferredHeight: 248
                     title: "Calendar"
-                    metric: calendarModel.count > 0 ? calendarModel.count + " loaded" : "Not loaded"
-                    detail: Backend.logged_in ? "Weekly events and reminders" : "Sign in to pull calendar events"
+                    metric: calendarAgenda.total_events > 0 ? calendarAgenda.total_events + " today" : "Day clear"
+                    detail: Backend.logged_in ? calendarAgenda.headline : "Sign in to pull calendar events"
                     model: calendarModel
                     emptyText: "No events loaded yet."
+                    loading: Backend.calendar_loading
                     onOpen: root.navigate(1)
                     onRefresh: Backend.refresh_calendar()
                 }
 
                 PreviewCard {
                     theme: root.theme
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
+                    Layout.preferredWidth: homeGrid.cardWidth
+                    Layout.preferredHeight: 248
                     title: "Weather"
                     metric: weatherLocationCount + " favorites"
                     detail: "Current conditions and Doppler shortcuts"
                     model: weatherModel
                     emptyText: "Add up to 5 locations in Settings."
+                    loading: Backend.weather_loading
                     onOpen: root.navigate(2)
                     onRefresh: Backend.refresh_weather()
                 }
 
                 PreviewCard {
                     theme: root.theme
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
+                    Layout.preferredWidth: homeGrid.cardWidth
+                    Layout.preferredHeight: 248
                     title: "Stocks"
                     metric: stockSymbolCount + " symbols"
                     detail: "Markets, commodities, and securities"
                     model: stocksModel
                     emptyText: "Your watchlist will preview here."
+                    loading: Backend.stocks_loading
                     onOpen: root.navigate(3)
                     onRefresh: Backend.refresh_stocks()
                 }
 
                 PreviewCard {
                     theme: root.theme
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
+                    Layout.preferredWidth: homeGrid.cardWidth
+                    Layout.preferredHeight: 248
                     title: "News"
                     metric: newsKeywordCount + " keywords"
                     detail: "Filtered headlines that match your terms"
                     model: newsModel
                     emptyText: "Refresh to load current headlines."
+                    loading: Backend.news_loading
                     onOpen: root.navigate(4)
                     onRefresh: Backend.refresh_news()
                 }
 
                 PreviewCard {
                     theme: root.theme
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
+                    Layout.preferredWidth: homeGrid.cardWidth
+                    Layout.preferredHeight: 248
                     title: "Browser"
                     metric: bookmarkCount + " shortcuts"
                     detail: "Pinned pages without duplicate tabs"
@@ -236,8 +248,8 @@ Rectangle {
                 }
 
                 Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
+                    Layout.preferredWidth: homeGrid.cardWidth
+                    Layout.preferredHeight: 248
                     color: theme.surface
                     radius: 6
                     border.color: theme.border
@@ -291,6 +303,7 @@ Rectangle {
         property string metric: ""
         property string detail: ""
         property string emptyText: ""
+        property bool loading: false
         property var theme
         property alias model: previewRepeater.model
         signal open()
@@ -322,6 +335,13 @@ Rectangle {
                     text: card.metric
                     font.pixelSize: 11
                     color: theme.muted
+                }
+
+                BusyIndicator {
+                    running: card.loading
+                    visible: running
+                    Layout.preferredWidth: 20
+                    Layout.preferredHeight: 20
                 }
             }
 
@@ -387,8 +407,9 @@ Rectangle {
                 spacing: 8
                 Item { Layout.fillWidth: true }
                 Button {
-                    text: "Refresh"
+                    text: card.loading ? "Refreshing..." : "Refresh"
                     flat: true
+                    enabled: !card.loading
                     onClicked: card.refresh()
                 }
                 Button {

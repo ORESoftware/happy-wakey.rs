@@ -1,6 +1,7 @@
 mod config;
 mod env_config;
 mod http;
+mod reminders;
 mod services;
 mod supabase;
 mod supabase_config;
@@ -40,10 +41,14 @@ mod qobject {
         #[qproperty(QString, user_id)]
         // Feed data (JSON payloads, parsed in QML)
         #[qproperty(QString, calendar_json)]
+        #[qproperty(QString, calendar_agenda_json)]
+        #[qproperty(bool, calendar_loading)]
         #[qproperty(QString, weather_json)]
+        #[qproperty(bool, weather_loading)]
         #[qproperty(QString, stocks_json)]
         #[qproperty(bool, stocks_loading)]
         #[qproperty(QString, news_json)]
+        #[qproperty(bool, news_loading)]
         // Config + onboarding
         #[qproperty(QString, app_config_json)]
         #[qproperty(QString, onboarding_json)]
@@ -59,6 +64,8 @@ mod qobject {
         fn logout(self: Pin<&mut Backend>);
         #[qinvokable]
         fn refresh_calendar(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn test_notification(self: Pin<&mut Backend>);
         #[qinvokable]
         fn refresh_weather(self: Pin<&mut Backend>);
         #[qinvokable]
@@ -95,10 +102,14 @@ pub struct BackendRust {
     user_email: QString,
     user_id: QString,
     calendar_json: QString,
+    calendar_agenda_json: QString,
+    calendar_loading: bool,
     weather_json: QString,
+    weather_loading: bool,
     stocks_json: QString,
     stocks_loading: bool,
     news_json: QString,
+    news_loading: bool,
     app_config_json: QString,
     onboarding_json: QString,
     status_msg: QString,
@@ -118,11 +129,15 @@ impl Default for BackendRust {
             logged_in: cfg.supabase_session.is_some(),
             user_email: QString::from(email.as_str()),
             user_id: QString::from(cfg.user_id.as_str()),
-            calendar_json: QString::default(),
+            calendar_json: json_qstring(&Vec::<services::calendar::CalendarEvent>::new()),
+            calendar_agenda_json: json_qstring(&services::calendar::build_agenda(&[])),
+            calendar_loading: false,
             weather_json: QString::default(),
+            weather_loading: false,
             stocks_json: QString::default(),
             stocks_loading: false,
             news_json: QString::default(),
+            news_loading: false,
             app_config_json: serialize_ui_config(&cfg),
             onboarding_json: serialize_onboarding(&cfg.onboarding),
             status_msg: QString::default(),
@@ -138,6 +153,8 @@ impl qobject::Backend {
     /// Supabase (if signed in) and merge it in.
     fn startup(self: Pin<&mut Self>) {
         let cfg = config::load();
+        reminders::update_settings(cfg.reminder_settings.clone());
+        reminders::start_worker();
         hydrate_onboarding(self, &cfg);
     }
 
@@ -161,11 +178,15 @@ impl qobject::Backend {
         if let Err(e) = config::save(&cfg) {
             emit_status(self.as_mut(), format!("Logout config save failed: {e}"));
         }
+        reminders::replace_events(Vec::new(), cfg.reminder_settings.clone());
         apply_config_snapshot(self.as_mut(), &cfg);
         emit_status(self, "Logged out".to_string());
     }
 
-    fn refresh_calendar(self: Pin<&mut Self>) {
+    fn refresh_calendar(mut self: Pin<&mut Self>) {
+        if *self.calendar_loading() {
+            return;
+        }
         let cfg = config::load();
         let Some(session) = cfg.supabase_session.clone() else {
             emit_status(self, "Sign in before refreshing calendars".to_string());
@@ -186,42 +207,119 @@ impl qobject::Backend {
         };
 
         let provider = session.provider.clone();
+        let reminder_settings = cfg.reminder_settings.clone();
+        self.as_mut().set_calendar_loading(true);
+        emit_status(self.as_mut(), "Refreshing calendar...".to_string());
         let thread = self.qt_thread();
         std::thread::spawn(move || {
             let result = match provider.as_str() {
                 "google" => services::calendar::fetch_google_events(&provider_token),
                 "azure" => services::calendar::fetch_outlook_events(&provider_token),
                 "apple" => Err("Apple sign-in doesn't provide a calendar API".to_string()),
-                other => Err(format!("Calendar sync isn't supported for '{other}' sign-in")),
-            };
+                other => Err(format!(
+                    "Calendar sync isn't supported for '{other}' sign-in"
+                )),
+            }
+            .map(|events| {
+                let agenda = services::calendar::build_agenda(&events);
+                reminders::replace_events(events.clone(), reminder_settings);
+                (events, agenda)
+            });
             thread
-                .queue(move |b| match result {
-                    Ok(events) => b.set_calendar_json(json_qstring(&events)),
-                    Err(e) => emit_status(b, format!("Calendar refresh failed: {e}")),
+                .queue(move |mut b| {
+                    b.as_mut().set_calendar_loading(false);
+                    match result {
+                        Ok((events, agenda)) => {
+                            let count = events.len();
+                            b.as_mut().set_calendar_json(json_qstring(&events));
+                            b.as_mut().set_calendar_agenda_json(json_qstring(&agenda));
+                            emit_status(b, format!("Calendar updated: {count} events"));
+                        }
+                        Err(e) => emit_status(b, format!("Calendar refresh failed: {e}")),
+                    }
                 })
                 .ok();
         });
     }
 
-    fn refresh_weather(self: Pin<&mut Self>) {
-        let cfg = config::load();
-        let locs = cfg.weather_locations.clone();
+    fn test_notification(self: Pin<&mut Self>) {
         let thread = self.qt_thread();
         std::thread::spawn(move || {
+            let result = reminders::show_test_notification();
+            thread
+                .queue(move |b| match result {
+                    Ok(()) => emit_status(b, "Test reminder sent".to_string()),
+                    Err(error) => emit_status(b, error),
+                })
+                .ok();
+        });
+    }
+
+    fn refresh_weather(mut self: Pin<&mut Self>) {
+        if *self.weather_loading() {
+            return;
+        }
+        let cfg = config::load();
+        let locs = cfg.weather_locations.clone();
+        if locs.is_empty() {
+            self.as_mut()
+                .set_weather_json(json_qstring(&Vec::<services::weather::WeatherData>::new()));
+            emit_status(self, "Add a weather location in Settings".to_string());
+            return;
+        }
+
+        self.as_mut().set_weather_loading(true);
+        emit_status(
+            self.as_mut(),
+            format!("Refreshing weather for {} location(s)...", locs.len()),
+        );
+        let thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let results = std::thread::scope(|scope| {
+                let handles: Vec<_> = locs
+                    .into_iter()
+                    .map(|loc| {
+                        scope.spawn(move || {
+                            let name = loc.name.clone();
+                            (
+                                name,
+                                services::weather::fetch_weather(loc.lat, loc.lon, &loc.name),
+                            )
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|handle| handle.join())
+                    .collect::<Vec<_>>()
+            });
+
             let mut data = Vec::new();
             let mut errors = Vec::new();
-            for loc in &locs {
-                match services::weather::fetch_weather(loc.lat, loc.lon, &loc.name) {
-                    Ok(w) => data.push(w),
-                    Err(e) => errors.push(format!("{}: {}", loc.name, e)),
+            for result in results {
+                match result {
+                    Ok((_, Ok(weather))) => data.push(weather),
+                    Ok((name, Err(error))) => errors.push(format!("{name}: {error}")),
+                    Err(_) => errors.push("A weather worker stopped unexpectedly".to_string()),
                 }
             }
             thread
                 .queue(move |mut b| {
                     b.as_mut().set_weather_json(json_qstring(&data));
-                    if !errors.is_empty() {
-                        emit_status(b, errors.join("; "));
-                    }
+                    b.as_mut().set_weather_loading(false);
+                    let message = if errors.is_empty() {
+                        format!("Weather updated: {} location(s)", data.len())
+                    } else if data.is_empty() {
+                        format!("Weather refresh failed: {}", errors.join("; "))
+                    } else {
+                        format!(
+                            "Weather updated for {}; {} failed: {}",
+                            data.len(),
+                            errors.len(),
+                            errors.join("; ")
+                        )
+                    };
+                    emit_status(b, message);
                 })
                 .ok();
         });
@@ -235,9 +333,17 @@ impl qobject::Backend {
         if *self.stocks_loading() {
             return;
         }
-        self.as_mut().set_stocks_loading(true);
         let cfg = config::load();
         let syms = cfg.stock_symbols.clone();
+        if syms.is_empty() {
+            emit_status(self, "Add a stock symbol in Settings".to_string());
+            return;
+        }
+        self.as_mut().set_stocks_loading(true);
+        emit_status(
+            self.as_mut(),
+            format!("Refreshing {} market symbol(s)...", syms.len()),
+        );
         let thread = self.qt_thread();
         std::thread::spawn(move || {
             let mut data = Vec::new();
@@ -252,24 +358,45 @@ impl qobject::Backend {
                 .queue(move |mut b| {
                     b.as_mut().set_stocks_json(json_qstring(&data));
                     b.as_mut().set_stocks_loading(false);
-                    if !errors.is_empty() {
-                        emit_status(b, errors.join("; "));
-                    }
+                    let message = if errors.is_empty() {
+                        format!("Markets updated: {} symbol(s)", data.len())
+                    } else if data.is_empty() {
+                        format!("Market refresh failed: {}", errors.join("; "))
+                    } else {
+                        format!(
+                            "Markets updated for {}; {} failed",
+                            data.len(),
+                            errors.len()
+                        )
+                    };
+                    emit_status(b, message);
                 })
                 .ok();
         });
     }
 
-    fn refresh_news(self: Pin<&mut Self>) {
+    fn refresh_news(mut self: Pin<&mut Self>) {
+        if *self.news_loading() {
+            return;
+        }
         let cfg = config::load();
         let kw = cfg.news_keywords.clone();
+        self.as_mut().set_news_loading(true);
+        emit_status(self.as_mut(), "Refreshing headlines...".to_string());
         let thread = self.qt_thread();
         std::thread::spawn(move || {
             let result = services::news::fetch_news(&kw);
             thread
-                .queue(move |b| match result {
-                    Ok(news) => b.set_news_json(json_qstring(&news)),
-                    Err(e) => emit_status(b, e),
+                .queue(move |mut b| {
+                    b.as_mut().set_news_loading(false);
+                    match result {
+                        Ok(news) => {
+                            let count = news.len();
+                            b.as_mut().set_news_json(json_qstring(&news));
+                            emit_status(b, format!("Headlines updated: {count} matched"));
+                        }
+                        Err(e) => emit_status(b, format!("News refresh failed: {e}")),
+                    }
                 })
                 .ok();
         });
@@ -283,6 +410,7 @@ impl qobject::Backend {
                 let cfg = config::merge_editable_config(current, incoming);
                 match config::save(&cfg) {
                     Ok(()) => {
+                        reminders::update_settings(cfg.reminder_settings.clone());
                         sync_config_to_supabase(&cfg, self.qt_thread());
                         apply_config_snapshot(self.as_mut(), &cfg);
                         emit_status(self, "Config saved".to_string());
@@ -300,12 +428,8 @@ impl qobject::Backend {
         step_index: i32,
         completed: bool,
     ) {
-        let cfg = config::set_onboarding_state(
-            config::load(),
-            &step.to_string(),
-            step_index,
-            completed,
-        );
+        let cfg =
+            config::set_onboarding_state(config::load(), &step.to_string(), step_index, completed);
         match config::save(&cfg) {
             Ok(()) => {
                 sync_onboarding_to_supabase(&cfg, self.qt_thread());
@@ -366,7 +490,8 @@ fn apply_config_snapshot(mut b: Pin<&mut Backend>, cfg: &config::Config) {
         .unwrap_or_default();
     b.as_mut().set_user_email(QString::from(email.as_str()));
     b.as_mut().set_app_config_json(serialize_ui_config(cfg));
-    b.as_mut().set_onboarding_json(serialize_onboarding(&cfg.onboarding));
+    b.as_mut()
+        .set_onboarding_json(serialize_onboarding(&cfg.onboarding));
 }
 
 fn on_login_result(mut b: Pin<&mut Backend>, result: Result<supabase::SupabaseSession, String>) {
@@ -424,20 +549,24 @@ fn hydrate_onboarding(b: Pin<&mut Backend>, cfg: &config::Config) {
     let access_token = session.access_token.clone();
     let local_state = cfg.onboarding.clone();
     let thread = b.qt_thread();
-    std::thread::spawn(move || match supabase_config::fetch_onboarding_state(&access_token) {
-        Ok(Some(remote)) => {
-            let merged = config::merge_onboarding(&local_state, &remote);
-            thread.queue(move |b| on_onboarding_synced(b, merged)).ok();
-        }
-        Ok(None) => {
-            let _ = supabase_config::save_onboarding_state(&access_token, &local_state);
-        }
-        Err(e) => {
-            thread
-                .queue(move |b| emit_status(b, format!("Supabase onboarding fetch failed: {e}")))
-                .ok();
-        }
-    });
+    std::thread::spawn(
+        move || match supabase_config::fetch_onboarding_state(&access_token) {
+            Ok(Some(remote)) => {
+                let merged = config::merge_onboarding(&local_state, &remote);
+                thread.queue(move |b| on_onboarding_synced(b, merged)).ok();
+            }
+            Ok(None) => {
+                let _ = supabase_config::save_onboarding_state(&access_token, &local_state);
+            }
+            Err(e) => {
+                thread
+                    .queue(move |b| {
+                        emit_status(b, format!("Supabase onboarding fetch failed: {e}"))
+                    })
+                    .ok();
+            }
+        },
+    );
 }
 
 fn sync_config_to_supabase(cfg: &config::Config, thread: BackendThread) {
@@ -456,7 +585,8 @@ fn sync_config_to_supabase(cfg: &config::Config, thread: BackendThread) {
                 .queue(move |b| emit_status(b, format!("Supabase config sync failed: {e}")))
                 .ok();
         }
-        if let Err(e) = supabase_config::save_onboarding_state(&access_token, &snapshot.onboarding) {
+        if let Err(e) = supabase_config::save_onboarding_state(&access_token, &snapshot.onboarding)
+        {
             thread
                 .queue(move |b| emit_status(b, format!("Supabase onboarding sync failed: {e}")))
                 .ok();
