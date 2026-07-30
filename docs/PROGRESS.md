@@ -1,6 +1,6 @@
 # Progress
 
-Status date: July 16, 2026
+Status date: July 29, 2026
 
 ## Current Product State
 
@@ -20,6 +20,7 @@ Happy Wakey is a working native Rust and Qt desktop prototype with a cohesive da
 | Apple OAuth | Implemented for identity | Apple login works through Supabase, but Apple Sign-In does not provide a calendar API |
 | Weekly calendar data | Working, credentials required | Google Calendar and Microsoft Graph normalize the current week into day groups, all-day/timed rows, conflict counts, and validated join/open links |
 | Daily agenda and reminders | Working, macOS live-tested | Home and Calendar show agenda summaries; the local scheduler supports configurable 30/10/5-minute native reminders with a persistent deduplication ledger |
+| Off-app email reminders | Implemented, deployment pending | Opt-in deterministic reminder reconciliation through shared auth, a durable Rust gateway, NATS request/reply, and the existing SendGrid contact service |
 | Gmail invitation discovery | Planned | Calendar API is primary; Gmail polling is optional for invitations not yet represented as events |
 | Calendly sync | Planned | Native OAuth/polling can remain serverless; webhooks require a public relay |
 | Weather | Working and live-tested | Up to five locations, current conditions, five-day forecast, and radar links |
@@ -59,12 +60,20 @@ The July 2026 modernization pass added or changed the following:
 - Added a native reminder worker with configurable offsets, late-refresh reconciliation, cancellation/all-day filtering, a 31-day atomic deduplication ledger, and retry after OS delivery failure.
 - Added macOS application identity handling so notifications fail clearly when the app is not running from a registered bundle.
 - Updated `quinn-proto` to `0.11.15` for `RUSTSEC-2026-0185` and aligned the CXX runtime/code generator at ABI `1.0.195` for `RUSTSEC-2026-0202` without forcing a broader CXX-Qt migration.
+- Added an in-memory shared-auth token exchange/cache and kept service credentials out of desktop JSON.
+- Added opt-in cloud email reminders, deterministic reconciliation IDs, bounded payloads, and a Settings test action.
+- Added a generated OpenAPI 3.1 Rust gateway with shared-auth introspection, verified-email targeting, PVC-backed atomic JSON state, retry/recovery, and Prometheus metrics.
+- Upgraded the contact email NATS consumer to request/reply so the gateway records delivery only after a matching idempotency key and successful provider outcome.
 
 ## Verification Performed
 
 The following checks passed during the modernization pass:
 
-- `cargo test --locked`: 49 tests passed; one network test remained ignored by default.
+- Desktop `cargo test --locked`: 51 tests passed; one network test remained ignored by default.
+- Desktop `cargo clippy --all-targets --locked -- -D warnings`: passed.
+- Gateway `cargo test --locked` and `cargo clippy --all-targets --locked -- -D warnings`: passed.
+- Contact service `cargo check --locked` and `cargo clippy --all-targets --locked -- -D warnings`: passed.
+- Kubernetes Kustomize rendering passed for the runtime and observability overlays; focused Node contract tests passed.
 - `cargo audit`: no vulnerabilities or informational warnings in the resolved 292-package graph.
 - `cargo test open_meteo_live_smoke -- --ignored`: passed against the real Open-Meteo API.
 - Local HTTP retry test: a temporary server returned `503` and then `200`; the client recovered and parsed the second response.
@@ -74,13 +83,14 @@ The following checks passed during the modernization pass:
 - Live onboarding QA: completed onboarding and persisted `completed: true`, `current_step: "complete"`, starter weather, stocks, and news choices.
 - Live calendar QA: fetched deterministic Google-shaped events over a loopback fixture, rendered all-day/timed groups and conflict totals, and exposed validated Join/Open actions.
 - Live reminder QA: delivered a native notification from a registered macOS app bundle, saved custom offsets, restarted, and restored the selected reminder settings.
+- Live cloud-reminder UI QA: a fresh native macOS bundle completed all onboarding Continue actions, opened the dashboard, rendered the new reminder controls, kept cloud actions unavailable while signed out, persisted mode-`0600` config, and reopened directly to Home.
 
-Finnhub, NewsAPI, and authenticated Supabase calls were not live-tested because their keys were not configured in the test environment. Their parsing, validation, and control flow compile and are covered where practical by unit tests.
+Finnhub, NewsAPI, authenticated Supabase calls, and end-to-end cloud reminder delivery were not live-tested because their keys were not configured in the test environment. The public platform TLS endpoint was reachable, but shared auth returned HTTP 500 through nginx and must be restored before deployment acceptance. Provider parsing, validation, and control flow compile and are covered where practical by unit tests.
 
 ## Known Gaps
 
 1. Calendar UX still needs a full weekly time grid, provider pagination/delta tokens, token refresh, and simultaneous multi-account aggregation.
-2. Reminders still need snooze/actions, a durable event cache, wake/login lifecycle integration, and installed-package verification on Windows and Linux.
+2. Reminders still need snooze/actions, a durable event cache, wake/login lifecycle integration, installed-package verification on Windows/Linux, and JetStream/contact-worker idempotency for crash-safe cloud delivery.
 3. OAuth/session tokens should move from JSON into the OS credential vault.
 4. Git backup needs a real repository lifecycle and conflict policy.
 5. Supabase should hydrate the redacted config snapshot at startup and define field-level merge semantics.

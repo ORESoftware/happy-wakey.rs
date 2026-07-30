@@ -67,3 +67,24 @@ aliases = ["config-dir"]
 type = "string"
 default = ""
 help = "Override for config directory path"
+
+[flags.platform_url]
+env = "HAPPY_WAKEY_PLATFORM_URL"
+aliases = ["platform-url"]
+type = "string"
+default = "https://98.90.186.114"
+help = "Public Happy Wakey platform base URL"
+
+[flags.shared_auth_url]
+env = "HAPPY_WAKEY_SHARED_AUTH_URL"
+aliases = ["shared-auth-url"]
+type = "string"
+default = ""
+help = "Override the shared-auth service base URL"
+
+[flags.happy_wakey_gateway_url]
+env = "HAPPY_WAKEY_GATEWAY_URL"
+aliases = ["happy-wakey-gateway-url"]
+type = "string"
+default = ""
+help = "Override the Happy Wakey gateway base URL"

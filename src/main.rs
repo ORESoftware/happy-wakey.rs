@@ -1,5 +1,6 @@
 mod config;
 mod env_config;
+mod gateway;
 mod http;
 mod reminders;
 mod services;
@@ -66,6 +67,8 @@ mod qobject {
         fn refresh_calendar(self: Pin<&mut Backend>);
         #[qinvokable]
         fn test_notification(self: Pin<&mut Backend>);
+        #[qinvokable]
+        fn test_cloud_notification(self: Pin<&mut Backend>);
         #[qinvokable]
         fn refresh_weather(self: Pin<&mut Backend>);
         #[qinvokable]
@@ -175,6 +178,7 @@ impl qobject::Backend {
     fn logout(mut self: Pin<&mut Self>) {
         let mut cfg = config::load();
         cfg.supabase_session = None;
+        gateway::clear_session();
         if let Err(e) = config::save(&cfg) {
             emit_status(self.as_mut(), format!("Logout config save failed: {e}"));
         }
@@ -208,6 +212,7 @@ impl qobject::Backend {
 
         let provider = session.provider.clone();
         let reminder_settings = cfg.reminder_settings.clone();
+        let supabase_access_token = session.access_token.clone();
         self.as_mut().set_calendar_loading(true);
         emit_status(self.as_mut(), "Refreshing calendar...".to_string());
         let thread = self.qt_thread();
@@ -222,18 +227,37 @@ impl qobject::Backend {
             }
             .map(|events| {
                 let agenda = services::calendar::build_agenda(&events);
-                reminders::replace_events(events.clone(), reminder_settings);
-                (events, agenda)
+                reminders::replace_events(events.clone(), reminder_settings.clone());
+                let cloud_result = if reminder_settings.cloud_email_enabled {
+                    Some(gateway::sync_calendar_reminders(
+                        &supabase_access_token,
+                        &events,
+                        &reminder_settings,
+                    ))
+                } else {
+                    None
+                };
+                (events, agenda, cloud_result)
             });
             thread
                 .queue(move |mut b| {
                     b.as_mut().set_calendar_loading(false);
                     match result {
-                        Ok((events, agenda)) => {
+                        Ok((events, agenda, cloud_result)) => {
                             let count = events.len();
                             b.as_mut().set_calendar_json(json_qstring(&events));
                             b.as_mut().set_calendar_agenda_json(json_qstring(&agenda));
-                            emit_status(b, format!("Calendar updated: {count} events"));
+                            let message = match cloud_result {
+                                Some(Ok(result)) => format!(
+                                    "Calendar updated: {count} events; {} cloud reminder(s) pending",
+                                    result.pending
+                                ),
+                                Some(Err(error)) => format!(
+                                    "Calendar updated: {count} events; cloud reminder sync failed: {error}"
+                                ),
+                                None => format!("Calendar updated: {count} events"),
+                            };
+                            emit_status(b, message);
                         }
                         Err(e) => emit_status(b, format!("Calendar refresh failed: {e}")),
                     }
@@ -250,6 +274,24 @@ impl qobject::Backend {
                 .queue(move |b| match result {
                     Ok(()) => emit_status(b, "Test reminder sent".to_string()),
                     Err(error) => emit_status(b, error),
+                })
+                .ok();
+        });
+    }
+
+    fn test_cloud_notification(self: Pin<&mut Self>) {
+        let cfg = config::load();
+        let Some(session) = cfg.supabase_session else {
+            emit_status(self, "Sign in before testing cloud reminders".to_string());
+            return;
+        };
+        let thread = self.qt_thread();
+        std::thread::spawn(move || {
+            let result = gateway::queue_test_reminder(&session.access_token);
+            thread
+                .queue(move |b| match result {
+                    Ok(()) => emit_status(b, "Cloud reminder queued".to_string()),
+                    Err(error) => emit_status(b, format!("Cloud reminder failed: {error}")),
                 })
                 .ok();
         });

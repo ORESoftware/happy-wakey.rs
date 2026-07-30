@@ -76,6 +76,7 @@ pub struct OnboardingState {
 #[serde(default)]
 pub struct ReminderSettings {
     pub enabled: bool,
+    pub cloud_email_enabled: bool,
     pub offsets_minutes: Vec<u16>,
 }
 
@@ -83,6 +84,7 @@ impl Default for ReminderSettings {
     fn default() -> Self {
         Self {
             enabled: true,
+            cloud_email_enabled: false,
             offsets_minutes: vec![30, 10],
         }
     }
@@ -670,6 +672,7 @@ mod tests {
     fn sanitize_reminder_offsets_sorts_deduplicates_and_clamps() {
         let cleaned = sanitize_reminder_settings(ReminderSettings {
             enabled: true,
+            cloud_email_enabled: false,
             offsets_minutes: vec![10, 30, 10, 0, 1441, 5, 120, 60, 15],
         });
         assert_eq!(cleaned.offsets_minutes, vec![120, 60, 30, 15, 10]);

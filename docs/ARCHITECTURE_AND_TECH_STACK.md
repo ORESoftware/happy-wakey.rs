@@ -27,6 +27,9 @@ flowchart LR
     Backend --> Workers["Rust worker threads"]
     Workers --> HTTP["Shared Reqwest client"]
     HTTP --> Providers["Calendar, weather, stocks, news, Supabase"]
+    HTTP --> SharedAuth["Shared auth token exchange"]
+    SharedAuth --> Gateway["Happy Wakey product gateway"]
+    Gateway --> Contact["NATS contact service / SendGrid"]
     Backend <--> Config["Sanitized local JSON"]
     Backend <--> Supabase["Supabase auth and REST sync"]
     Backend --> ReminderEngine["Canonical event and reminder engine"]
@@ -34,7 +37,7 @@ flowchart LR
     QML --> WebEngine["Qt WebEngine browser tabs"]
 ```
 
-The local reminder path is implemented: normalized calendar events feed a 20-second Rust worker, configurable offsets, and an atomic deduplication ledger. `notify-rust` supplies the current native notification adapter. Durable event caching, snooze/actions, and installed-package acceptance on Windows and Linux remain future work.
+The local reminder path is implemented: normalized calendar events feed a 20-second Rust worker, configurable offsets, and an atomic deduplication ledger. `notify-rust` supplies the current native notification adapter. An optional cloud path reconciles deterministic future reminder jobs to a small Rust gateway so email can be delivered while the app is closed. Durable event caching, snooze/actions, and installed-package acceptance on Windows and Linux remain future work.
 
 ## Runtime Lifecycle
 
@@ -113,7 +116,7 @@ The shared HTTP client in `src/http.rs` provides:
 - 2 MiB JSON response limit;
 - bounded provider error text.
 
-POSTs are not automatically retried by this helper. That avoids duplicating non-idempotent operations.
+POSTs and PUTs use a separate one-shot JSON helper and are not automatically retried. Reminder reconciliation itself is idempotent by deterministic job and idempotency keys, but retry policy remains explicit at the call site.
 
 ## Configuration Stack
 
@@ -127,6 +130,8 @@ Startup precedence is:
 Local user configuration is stored as JSON under the OS config directory unless `CONFIG_DIR` overrides it. Rust sanitizes collection sizes, text, coordinates, stock symbols, URLs, onboarding state, and user-editable paths before saving.
 
 Saving uses a temporary file, flush/sync, and rename. Unix files are restricted to mode `0600`.
+
+Shared-auth access tokens are cached only in process memory and are cleared on logout. The desktop never receives NATS addresses, contact-service credentials, SendGrid keys, or the backend introspection secret.
 
 ## Tech Stack
 
@@ -146,6 +151,9 @@ Saving uses a temporary file, flush/sync, and rename. Unix files are restricted 
 | Config paths | `dirs` | OS-appropriate configuration directory |
 | Environment | `dotenvy` | Local development configuration |
 | Backend service | Supabase Auth + PostgREST/Postgres | OAuth broker, user config mirror, onboarding state |
+| Product gateway | Rust, Axum, Utoipa | Shared-auth-protected capabilities and durable reminder reconciliation |
+| Service messaging | NATS request/reply | Fixed contact-service email lane with delivery outcome acknowledgement |
+| Cluster delivery | Kubernetes + Argo CD | One-owner scheduler, PVC JSON state, ExternalSecret, NetworkPolicy, Prometheus |
 | Build | Cargo + `cxx-qt-build` | Rust/C++ generation, QML resource module, Qt linking |
 
 ## Source Map
@@ -156,6 +164,7 @@ Saving uses a temporary file, flush/sync, and rename. Unix files are restricted 
 | `src/config.rs` | Config schema, sanitization, merge rules, atomic local persistence |
 | `src/env_config.rs` | `.env`, environment, and CLI precedence |
 | `src/http.rs` | Shared bounded and retry-aware HTTP GET layer |
+| `src/gateway.rs` | Shared-auth token exchange/cache and cloud reminder reconciliation |
 | `src/reminders.rs` | Reminder reconciliation, native delivery, and atomic deduplication ledger |
 | `src/supabase.rs` | PKCE OAuth loopback login and session parsing |
 | `src/supabase_config.rs` | User-scoped Supabase REST config/onboarding access |

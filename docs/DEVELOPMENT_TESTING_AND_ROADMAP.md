@@ -33,6 +33,9 @@ Important variables:
 | `CONFIG_DIR` | Isolated config location for tests |
 | `HAPPY_WAKEY_OAUTH_PORT` | OAuth loopback port; default 47217 |
 | `HAPPY_WAKEY_BUNDLE_ID` | Stable registered application ID used by macOS notifications |
+| `HAPPY_WAKEY_PLATFORM_URL` | Public base for shared auth and the Happy Wakey gateway |
+| `HAPPY_WAKEY_SHARED_AUTH_URL` | Loopback/development override for shared auth |
+| `HAPPY_WAKEY_GATEWAY_URL` | Loopback/development override for the product gateway |
 
 Precedence is CLI flag, system environment, `.env`, then built-in default.
 
@@ -76,7 +79,8 @@ Current unit coverage includes:
 - external URL safety;
 - transient HTTP retry against a local test server.
 - Google/Microsoft calendar normalization, local week boundaries, all-day semantics, agenda conflicts, and deduplication;
-- reminder offset reconciliation, cancellation filtering, ledger retention, and failed-delivery retry state.
+- reminder offset reconciliation, cancellation filtering, ledger retention, and failed-delivery retry state;
+- deterministic future-only cloud jobs and HTTPS/loopback service URL enforcement.
 
 ### Live Provider Tests
 
@@ -105,7 +109,8 @@ Test the built desktop executable, not only QML source:
 8. Open multiple browser tabs and confirm duplicate URL prevention.
 9. Restart and verify configuration persistence.
 10. Send a test reminder, change reminder offsets, restart, and verify both native delivery and persisted settings.
-11. Test screen reader names, tab order, high DPI, and reduced motion where applicable.
+11. After sign-in, enable cloud email reminders, refresh Calendar, verify the pending count, and use Test cloud email.
+12. Test screen reader names, tab order, high DPI, and reduced motion where applicable.
 
 ## Immediate Roadmap
 

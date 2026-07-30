@@ -100,6 +100,24 @@ fn builtin_flags() -> Vec<FlagEntry> {
             short: None,
             default_val: None,
         },
+        FlagEntry {
+            env: "HAPPY_WAKEY_PLATFORM_URL".into(),
+            aliases: vec!["platform-url".into()],
+            short: None,
+            default_val: Some("https://98.90.186.114".into()),
+        },
+        FlagEntry {
+            env: "HAPPY_WAKEY_SHARED_AUTH_URL".into(),
+            aliases: vec!["shared-auth-url".into()],
+            short: None,
+            default_val: None,
+        },
+        FlagEntry {
+            env: "HAPPY_WAKEY_GATEWAY_URL".into(),
+            aliases: vec!["happy-wakey-gateway-url".into()],
+            short: None,
+            default_val: None,
+        },
     ]
 }
 

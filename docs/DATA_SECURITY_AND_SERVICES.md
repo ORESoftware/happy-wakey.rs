@@ -2,11 +2,11 @@
 
 ## Server Philosophy
 
-The app is designed to avoid a custom always-on application server.
+The app is designed to avoid a broad custom application backend.
 
-Direct desktop-to-provider calls handle calendar, weather, market, and news data. Supabase is the optional managed backend for OAuth brokering and user-scoped synchronization. There is no custom business-logic server in the current architecture.
+Direct desktop-to-provider calls still handle calendar, weather, market, and news data. Supabase brokers OAuth and user-scoped synchronization. The only Happy Wakey-specific backend is a narrow opt-in gateway for capabilities and off-app email reminders.
 
-This is viable because the app does not need to share a central operational database. It stores user preferences as JSON and keeps provider data transient in memory.
+There is still no central product database. User preferences remain JSON, provider data remains transient in memory, onboarding state remains in Supabase, and the gateway persists a bounded operational reminder queue as JSON on a Kubernetes PVC.
 
 ## Local Configuration
 
@@ -20,6 +20,7 @@ The local JSON schema includes:
 - up to fifty browser bookmarks;
 - Git repository/path setting;
 - Supabase sync toggle;
+- local and cloud reminder settings;
 - onboarding state.
 
 Configuration is sanitized before save. The file is written to a temporary sibling, flushed, synchronized, and renamed into place. On Unix, mode `0600` restricts access to the current user.
@@ -33,6 +34,8 @@ The local JSON currently contains Supabase and provider session tokens. Restrict
 - Linux Secret Service/libsecret.
 
 The JSON file should retain only non-secret provider/account identifiers and keychain lookup references.
+
+Shared-auth access tokens are not added to this file. They are cached only in process memory and cleared on logout. Backend introspection credentials, NATS credentials, and SendGrid keys exist only in cluster-managed secrets.
 
 ## Remote Configuration
 
@@ -93,10 +96,13 @@ The login flow uses Authorization Code with PKCE:
 5. Validate the loopback callback path and state.
 6. Exchange the authorization code with the verifier.
 7. Persist the Supabase session and provider token.
+8. For an authenticated product call, exchange the Supabase bearer at shared auth and cache the returned short-lived access token only in memory.
 
 Provider aliases are normalized. `microsoft` maps to Supabase's `azure` provider.
 
 Calendar APIs use the provider's token, not the Supabase JWT.
+
+The Happy Wakey gateway accepts only shared-auth bearer tokens. It introspects them with a backend-only credential, derives the user ID and verified delivery email from the result, and never trusts a desktop-supplied email destination.
 
 ## External Service Matrix
 
@@ -111,6 +117,9 @@ Calendar APIs use the provider's token, not the Supabase JWT.
 | News | NewsAPI | `X-Api-Key` header | 25 candidates, five retained | Local keyword match and dedupe |
 | Radar | Windy web map | None | External HTTPS URL | Opens interactive map centered on coordinates |
 | Auth/config | Supabase | anon key + user access token | Auth and PostgREST | RLS protects per-user rows |
+| Product auth | Shared auth | Supabase bearer exchange, then short-lived platform bearer | Token exchange and backend introspection | Platform token remains memory-only on desktop |
+| Off-app reminders | Happy Wakey Rust gateway | Shared-auth bearer | User-scoped reconciliation and status | Atomic bounded JSON state on a PVC; no arbitrary destinations |
+| Email delivery | Contact service + SendGrid | In-cluster NATS credential | Fixed-subject request/reply | Matching idempotency key and successful provider outcome required |
 | Gmail invitations | Gmail API | User OAuth, minimum required Gmail scope | Incremental polling on installed clients | Optional enrichment for invites not yet in Calendar |
 | Calendly | Calendly API v2 | Native OAuth 2.1 with PKCE | Incremental polling without server | Webhooks require public receiver and eligible plan |
 | Apple local calendar | EventKit on macOS | OS calendar permission | Local event-store query | Apple Sign-In is unrelated to calendar access |
@@ -138,6 +147,8 @@ External GET calls share one bounded client. Important safeguards include:
 - API key headers where supported;
 - HTTP/HTTPS validation for user URLs and news results;
 - bounded errors that avoid echoing request URLs containing secrets.
+
+Authenticated product writes use a one-shot JSON helper with the same client and response bounds. They are not automatically retried. Reminder sync is deterministic and idempotent, while the gateway owns delivery retry and recovery.
 
 Remaining work:
 

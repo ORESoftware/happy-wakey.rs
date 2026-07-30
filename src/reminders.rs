@@ -293,6 +293,7 @@ mod tests {
     fn settings() -> ReminderSettings {
         ReminderSettings {
             enabled: true,
+            cloud_email_enabled: false,
             offsets_minutes: vec![30, 10],
         }
     }
@@ -360,6 +361,7 @@ mod tests {
 
         let disabled = ReminderSettings {
             enabled: false,
+            cloud_email_enabled: false,
             offsets_minutes: vec![10],
         };
         assert!(due_notices(&[event(start)], &disabled, &mut ledger, start - 5 * 60).is_empty());
@@ -373,6 +375,7 @@ mod tests {
         };
         let settings = ReminderSettings {
             enabled: false,
+            cloud_email_enabled: false,
             offsets_minutes: vec![],
         };
         let now = LEDGER_RETENTION_SECONDS + 2;

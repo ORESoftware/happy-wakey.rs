@@ -1,6 +1,6 @@
 # Happy Wakey
 
-A cross-platform Rust desktop app for calendar, weather, markets, news, and frequently used pages. The interface is native Qt/QML, the application core is Rust, and Supabase provides optional auth and config sync.
+A cross-platform Rust desktop app for calendar, weather, markets, news, and frequently used pages. The interface is native Qt/QML, the application core is Rust, and Supabase provides optional auth and config sync. Local reminders need no Happy Wakey server; opt-in off-app email reminders use the shared-auth-backed product gateway.
 
 ## Prerequisites
 
@@ -44,6 +44,9 @@ Priority (highest to lowest):
 | `--newsapi-key` | `NEWSAPI_KEY` | `-n` | NewsAPI key |
 | `--git-repo` | `GIT_REPO_PATH` | | Path to git config backup |
 | `--config-dir` | `CONFIG_DIR` | | Override config directory |
+| `--platform-url` | `HAPPY_WAKEY_PLATFORM_URL` | | Public platform base URL for shared auth and the Happy Wakey gateway |
+| `--shared-auth-url` | `HAPPY_WAKEY_SHARED_AUTH_URL` | | Development override for shared auth |
+| `--happy-wakey-gateway-url` | `HAPPY_WAKEY_GATEWAY_URL` | | Development override for the Happy Wakey gateway |
 
 Flag definitions live in `.cli-flags.toml` (compatible with `flags-2-env` tool).
 
@@ -54,6 +57,7 @@ Flag definitions live in `.cli-flags.toml` (compatible with `flags-2-env` tool).
 - **News:** NewsAPI supplies up to five keyword-matched headlines. Set `NEWSAPI_KEY`.
 - **Calendar:** Google Calendar and Microsoft Graph use provider OAuth tokens obtained through Supabase login.
 - **Reminders:** a local Rust scheduler delivers configurable desktop alerts and persists a deduplication ledger; macOS builds require a stable registered `HAPPY_WAKEY_BUNDLE_ID`.
+- **Off-app reminders:** an opt-in setting reconciles future calendar reminders to the Happy Wakey gateway. The desktop exchanges its Supabase token for a short-lived shared-auth token; the gateway derives the verified email from that identity and delegates delivery through the contact service.
 
 All GET integrations share a pooled HTTP client with connection and request timeouts, bounded JSON responses, limited redirects, and retries for transient failures. API keys are sent in headers where the provider supports it.
 
@@ -68,6 +72,7 @@ src/
   main.rs              # Entry point, Backend QObject, Qt event loop
   config.rs            # Local config (JSON in ~/.config/happy-wakey/)
   env_config.rs        # .env + CLI flag parsing (flags-2-env style)
+  gateway.rs           # Shared-auth exchange + off-app reminder reconciliation
   reminders.rs         # Native reminder scheduler + delivery ledger
   supabase.rs          # PKCE OAuth login flow
   supabase_config.rs   # Config sync to Supabase REST API

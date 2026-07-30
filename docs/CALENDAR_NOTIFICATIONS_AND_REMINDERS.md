@@ -97,13 +97,17 @@ flowchart TD
     Cache --> Scheduler["Reminder scheduler"]
     Scheduler --> Ledger["Notification ledger"]
     Scheduler --> Native["Native OS notifications"]
+    Scheduler --> SharedAuth["Shared-auth exchange"]
+    SharedAuth --> Gateway["Happy Wakey gateway"]
+    Gateway --> Contact["NATS contact service"]
+    Contact --> Email["Off-app email reminder"]
 ```
 
 Provider sync runs on Rust worker threads. Results return to a single event coordinator, which normalizes, deduplicates, updates the local cache, reconciles scheduled reminders, and publishes a typed/summarized model to QML.
 
 ## Current Implementation
 
-The July 2026 implementation establishes the first local reminder slice:
+The July 2026 implementation establishes the local reminder slice and the first opt-in off-app delivery path:
 
 - Google Calendar and Microsoft Graph responses normalize into one `CalendarEvent` shape with provider IDs, `iCalUID`, status, all-day semantics, local day/time labels, location, and validated join/event URLs;
 - duplicate occurrences are collapsed by provider, `iCalUID`, and start time;
@@ -112,9 +116,13 @@ The July 2026 implementation establishes the first local reminder slice:
 - all-day, canceled, and already-started events do not notify;
 - late refresh sends one useful alert instead of a burst, while recording all elapsed offsets;
 - delivery IDs are retained for 31 days in an atomic `0600` ledger and are restored for retry if native delivery fails;
-- a Settings action exercises the native notification path directly.
+- a Settings action exercises the native notification path directly;
+- when cloud email reminders are enabled, the desktop derives deterministic jobs from the same normalized events and reconciles only future, non-canceled, non-all-day occurrences;
+- the desktop exchanges its Supabase access token for a short-lived shared-auth token cached only in memory;
+- a Rust gateway introspects shared-auth identity, targets only the account's verified email, persists jobs atomically on a PVC, and requests delivery from the fixed NATS contact lane;
+- delivery is recorded only after the contact worker returns a successful outcome with the matching idempotency key.
 
-The current scheduler is process-based: the app must be running, and its calendar data must have refreshed. It does not yet persist an offline event cache, snooze notifications, refresh provider tokens, consume incremental sync tokens, or aggregate multiple provider accounts at once. macOS delivery was verified from a registered app bundle; Windows and Linux still require installed-package acceptance tests.
+Local desktop notifications still require the app to be running and calendar data to have refreshed. Reconciled cloud email jobs can fire after the app closes, but reconciliation likewise requires a successful calendar refresh first. The system does not yet persist an offline desktop event cache, snooze notifications, refresh provider tokens, consume incremental sync tokens, or aggregate multiple provider accounts at once. macOS local delivery was verified from a registered app bundle; Windows and Linux still require installed-package acceptance tests.
 
 ## Provider Strategy
 
@@ -216,7 +224,19 @@ The app can deliver useful reminders without a server:
 
 This is the recommended first milestone.
 
-### Phase 2: Optional Event Relay
+### Phase 1.5: Narrow Reminder Gateway
+
+Implemented as an opt-in path:
+
+- Supabase remains the desktop identity broker;
+- shared auth exchanges the Supabase bearer for a short-lived platform token;
+- the Happy Wakey gateway stores only bounded delivery jobs and verified account email;
+- the existing contact service owns SendGrid and acknowledges its outcome over NATS request/reply;
+- no NATS address, backend introspection credential, or SendGrid key enters desktop config.
+
+The gateway deliberately does not proxy arbitrary service URLs or NATS subjects. Its public API is limited to capability discovery and user-scoped reminder reconciliation.
+
+### Phase 2: Provider Event Relay
 
 Use a small relay only when near-real-time changes while the desktop is offline become important. It can receive:
 

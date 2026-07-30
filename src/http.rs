@@ -57,6 +57,17 @@ where
     Err(format!("{service} request failed after retries"))
 }
 
+/// Execute one JSON request without retrying a potentially non-idempotent operation.
+pub fn send_json<T>(service: &str, request: RequestBuilder) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let response = request
+        .send()
+        .map_err(|error| transport_error(service, &error))?;
+    parse_json_response(service, response)
+}
+
 fn parse_json_response<T>(service: &str, mut response: Response) -> Result<T, String>
 where
     T: DeserializeOwned,
