@@ -85,7 +85,7 @@ The following checks passed during the modernization pass:
 - Live reminder QA: delivered a native notification from a registered macOS app bundle, saved custom offsets, restarted, and restored the selected reminder settings.
 - Live cloud-reminder UI QA: a fresh native macOS bundle completed all onboarding Continue actions, opened the dashboard, rendered the new reminder controls, kept cloud actions unavailable while signed out, persisted mode-`0600` config, and reopened directly to Home.
 
-Finnhub, NewsAPI, authenticated Supabase calls, and end-to-end cloud reminder delivery were not live-tested because their keys were not configured in the test environment. The public platform TLS endpoint was reachable, but shared auth returned HTTP 500 through nginx and must be restored before deployment acceptance. Provider parsing, validation, and control flow compile and are covered where practical by unit tests.
+Finnhub, NewsAPI, authenticated Supabase calls, and end-to-end cloud reminder delivery were not live-tested because their keys were not configured in the test environment. The public platform TLS endpoint was reachable, but shared auth returned HTTP 500 through nginx and must be restored before deployment acceptance. The gateway manifests reconciled in AWS, but the cluster had no registered EBS CSI driver for the shared `dd-block` class, no shared-auth Argo application, no provider-credentials secret, and no node-role read grant for that secret path. Provider parsing, validation, and control flow compile and are covered where practical by unit tests.
 
 ## Known Gaps
 
